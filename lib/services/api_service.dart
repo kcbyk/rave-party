@@ -11,18 +11,13 @@ class ApiService {
   factory ApiService() => _instance;
   ApiService._internal();
 
-  /// Sunucu adresi: Emülatörde 10.0.2.2, Windows/Web/Masaüstünde localhost
-  static const _configuredServer = String.fromEnvironment('SERVER_URL');
-  static String get baseUrl {
-    if (_configuredServer.isNotEmpty) return _configuredServer;
-    if (kIsWeb) return 'http://localhost:3000';
-    try {
-      if (Platform.isAndroid) {
-        return 'http://10.0.2.2:3000';
-      }
-    } catch (_) {}
-    return 'http://localhost:3000';
-  }
+  /// Sunucu adresi: Canlı Render sunucusu varsayılandır.
+  /// Yerel geliştirme için --dart-define=SERVER_URL=http://localhost:3000 verilebilir.
+  static const _configuredServer = String.fromEnvironment(
+    'SERVER_URL',
+    defaultValue: 'https://party-rave-api.onrender.com',
+  );
+  static String get baseUrl => _configuredServer;
 
   /// Aktif kullanıcının profilini sunucuyla senkronize eder
   Future<bool> syncUserProfile() async {

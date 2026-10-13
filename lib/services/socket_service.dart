@@ -27,18 +27,13 @@ class SocketService {
   void Function(String fromUserId, Map<String, dynamic> signal)? onWebRtcSignal;
   void Function(String message)? onAppError;
 
-  static const _configuredServer = String.fromEnvironment('SERVER_URL');
-
-  static String get serverUrl {
-    if (_configuredServer.isNotEmpty) return _configuredServer;
-    if (kIsWeb) return 'http://localhost:3000';
-    try {
-      if (Platform.isAndroid) {
-        return 'http://10.0.2.2:3000';
-      }
-    } catch (_) {}
-    return 'http://localhost:3000';
-  }
+  /// Sunucu adresi: Canlı Render sunucusu varsayılandır.
+  /// Yerel geliştirme için --dart-define=SERVER_URL=http://localhost:3000 verilebilir.
+  static const _configuredServer = String.fromEnvironment(
+    'SERVER_URL',
+    defaultValue: 'https://party-rave-api.onrender.com',
+  );
+  static String get serverUrl => _configuredServer;
 
   /// Socket.IO sunucusuna bağlanır
   void initSocket() {
