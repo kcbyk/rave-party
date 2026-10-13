@@ -3,7 +3,7 @@ services:
     name: party-rave-api
     runtime: node
     region: frankfurt
-    plan: starter
+    plan: free
     rootDir: backend
     buildCommand: npm ci
     startCommand: npm start
@@ -11,11 +11,5 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.18.0
-      - key: DATA_FILE
-        value: /var/data/party-rave.json
       - key: CORS_ORIGIN
         value: "*"
-    disk:
-      name: party-rave-data
-      mountPath: /var/data
-      sizeGB: 1

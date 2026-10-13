@@ -10,7 +10,7 @@ npm ci
 npm start
 ```
 
-The server stores users, friend requests, room invitations, and rooms in `backend/data/party-rave.json`. Set `DATA_FILE` to use a managed persistent volume in production. Set `CORS_ORIGIN` to the deployed app origin.
+The server stores users, friend requests, room invitations, and rooms in `backend/data/party-rave.json`. This file is suitable for local development. A Render free service has ephemeral storage, so attach a persistent database or disk before relying on accounts and invitations in production. Set `DATA_FILE` to use a managed persistent volume when available. Set `CORS_ORIGIN` to the deployed app origin.
 
 ## Run the app
 
