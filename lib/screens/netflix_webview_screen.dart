@@ -24,6 +24,11 @@ class _NetflixWebViewScreenState extends State<NetflixWebViewScreen> {
   int _loadingProgress = 0;
   bool _hasError = false;
 
+  // Party overlay state — Netflix kendi WebView'ında oynar
+  bool _isPartyMode = false;
+  bool _showPartyPanel = true;
+  String _partyTitle = 'Netflix';
+
   @override
   void initState() {
     super.initState();
@@ -63,9 +68,17 @@ class _NetflixWebViewScreenState extends State<NetflixWebViewScreen> {
               controller.loadRequest(Uri.parse('https://www.netflix.com/browse'));
             }
 
-            // Rave gibi: /watch/ URL'ine girilince otomatik odaya geç
-            if (url.contains('netflix.com/watch/')) {
-              _openNetflixInRoom(url);
+            // /watch/ URL'ine girilince party overlay'i aç
+            // (Yeni WebView açmak yerine bu WebView'da oynuyor, overlay geliyor)
+            if (url.contains('netflix.com/watch/') && !_isPartyMode) {
+              _activatePartyMode(url);
+            }
+
+            // /browse'a dönünce party modunu kapat
+            if (url.contains('/browse') || url.contains('/title')) {
+              if (_isPartyMode) {
+                setState(() => _isPartyMode = false);
+              }
             }
           },
           onPageFinished: (url) {
@@ -114,50 +127,26 @@ class _NetflixWebViewScreenState extends State<NetflixWebViewScreen> {
     }
   }
 
-  // Rave gibi: Netflix /watch/ URL'ini tespit edince odaya geç
-  Future<void> _openNetflixInRoom(String url) async {
-    // Videoyu durdur
-    try {
-      await _controller?.runJavaScript('''
-        document.querySelectorAll('video').forEach(function(v) {
-          v.pause(); v.muted = true;
-        });
-      ''');
-    } catch (_) {}
+  // Rave gibi: /watch/ URL'ini tespit edince overlay oda modu başlat
+  // (Yeni WebView açmıyoruz - DRM zaten bu WebView'da çalışıyor)
+  Future<void> _activatePartyMode(String url) async {
+    if (_isPartyMode) return; // Zaten aktif
 
     String title = 'Netflix';
     try {
       title = (await _controller?.getTitle() ?? 'Netflix')
           .replaceAll('- Netflix', '').replaceAll('| Netflix', '').trim();
-      if (title.isEmpty) title = 'Netflix İçeriği';
+      if (title.isEmpty || title == 'Netflix') title = 'Netflix İçeriği';
     } catch (_) {}
 
     if (!mounted) return;
-
-    final contentToPlay = Movie(
-      id: 'netflix_${DateTime.now().millisecondsSinceEpoch}',
-      title: title,
-      category: 'Netflix',
-      duration: 'Netflix Yayını',
-      rating: 4.8,
-      posterUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=600&auto=format&fit=crop&q=80',
-      backdropUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1200&auto=format&fit=crop&q=80',
-      description: 'Netflix içeriği',
-      videoUrl: url,
-      releaseYear: '2026',
-      tags: ['Netflix', 'Canlı', 'Oda'],
-    );
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => WatchPartyRoomScreen(
-          movie: contentToPlay,
-          invitedFriends: const [],
-        ),
-      ),
-    );
+    setState(() {
+      _isPartyMode = true;
+      _showPartyPanel = true;
+      _partyTitle = title;
+    });
   }
+
 
   void _openMovieDetail(Movie movie) {
     showModalBottomSheet(
@@ -239,6 +228,97 @@ class _NetflixWebViewScreenState extends State<NetflixWebViewScreen> {
                   ),
                 ),
               ),
+            ),
+
+            // PARTY MODE OVERLAY — Netflix video oynarken üstte oda paneli
+            if (_isPartyMode && _showPartyPanel)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: _buildPartyOverlay(),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  Widget _buildPartyOverlay() {
+    return Container(
+      margin: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.netflixRed.withValues(alpha: 0.6), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.netflixRed.withValues(alpha: 0.25),
+            blurRadius: 20,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            // Kırmızı canlı dot
+            Container(
+              width: 8, height: 8,
+              decoration: const BoxDecoration(color: AppTheme.netflixRed, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _partyTitle,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Oda'ya git butonu
+            GestureDetector(
+              onTap: () async {
+                String? currentUrl;
+                try { currentUrl = await _controller?.currentUrl(); } catch (_) {}
+                final movie = Movie(
+                  id: 'netflix_party_${DateTime.now().millisecondsSinceEpoch}',
+                  title: _partyTitle,
+                  category: 'Netflix',
+                  duration: 'Netflix Yayını',
+                  rating: 4.8,
+                  posterUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=600&auto=format&fit=crop&q=80',
+                  backdropUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1200&auto=format&fit=crop&q=80',
+                  description: 'Netflix videosu — bu cihazda oynanıyor',
+                  videoUrl: currentUrl ?? 'https://www.netflix.com/browse',
+                  releaseYear: '2026',
+                  tags: ['Netflix', 'Canlı', 'Oda'],
+                );
+                if (!mounted) return;
+                Navigator.push(context, MaterialPageRoute(
+                  builder: (ctx) => WatchPartyRoomScreen(movie: movie, invitedFriends: const []),
+                ));
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(color: AppTheme.netflixRed, borderRadius: BorderRadius.circular(8)),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.people, color: Colors.white, size: 14),
+                    SizedBox(width: 5),
+                    Text('Oda Aç', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => setState(() => _showPartyPanel = false),
+              child: const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 22),
             ),
           ],
         ),

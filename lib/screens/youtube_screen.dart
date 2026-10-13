@@ -34,10 +34,22 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
       final controller = WebViewController();
       controller.setJavaScriptMode(JavaScriptMode.unrestricted);
       controller.setBackgroundColor(Colors.black);
-      // Mobil YouTube deneyimi için doğru UA - Rave gibi
       controller.setUserAgent(
         'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36',
       );
+
+      // YouTube SPA navigation'ı yakalamak için JS kanalı
+      controller.addJavaScriptChannel(
+        'YouTubeRave',
+        onMessageReceived: (JavaScriptMessage msg) {
+          final url = msg.message;
+          final videoId = _extractYouTubeId(url);
+          if (videoId != null && mounted) {
+            _openVideoInRoom(url, videoId);
+          }
+        },
+      );
+
       controller.setNavigationDelegate(
         NavigationDelegate(
           onNavigationRequest: (request) {
@@ -47,6 +59,12 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
                 url.startsWith('market:') || url.startsWith('vnd.youtube:')) {
               return NavigationDecision.prevent;
             }
+            // Tam sayfa navigasyonlarda da kontrol et (fallback)
+            final videoId = _extractYouTubeId(url);
+            if (videoId != null && mounted) {
+              Future.microtask(() => _openVideoInRoom(url, videoId));
+              return NavigationDecision.prevent;
+            }
             return NavigationDecision.navigate;
           },
           onProgress: (progress) {
@@ -54,15 +72,39 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
           },
           onPageStarted: (url) {
             if (mounted) setState(() => _hasError = false);
-
-            // Rave gibi: Video URL'ini tespit edince otomatik odaya geç
-            final videoId = _extractYouTubeId(url);
-            if (videoId != null && mounted) {
-              _openVideoInRoom(url, videoId);
-            }
           },
           onPageFinished: (url) {
             if (mounted) setState(() => _loadingProgress = 100);
+            // Her sayfa yüklenince pushState/replaceState override'ı enjekte et
+            // YouTube SPA navigation'ını yakalar
+            controller.runJavaScript('''
+              (function() {
+                if (window.__raveHooked) return;
+                window.__raveHooked = true;
+                var lastSent = '';
+                function checkAndSend(url) {
+                  if (url !== lastSent && url.indexOf('/watch') !== -1 && url.indexOf('v=') !== -1) {
+                    lastSent = url;
+                    try { YouTubeRave.postMessage(url); } catch(e) {}
+                  }
+                }
+                var origPush = history.pushState;
+                history.pushState = function() {
+                  origPush.apply(this, arguments);
+                  checkAndSend(location.href);
+                };
+                var origReplace = history.replaceState;
+                history.replaceState = function() {
+                  origReplace.apply(this, arguments);
+                  checkAndSend(location.href);
+                };
+                window.addEventListener('popstate', function() {
+                  checkAndSend(location.href);
+                });
+                // Şu anki URL'i de kontrol et
+                checkAndSend(location.href);
+              })();
+            ''');
           },
           onWebResourceError: (error) {
             if (mounted && (error.isForMainFrame ?? true)) {
@@ -71,7 +113,6 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
           },
         ),
       );
-      // YouTube mobil ana sayfasına git
       controller.loadRequest(Uri.parse(widget.initialUrl));
 
       setState(() {
