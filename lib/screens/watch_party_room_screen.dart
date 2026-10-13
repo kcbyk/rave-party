@@ -10,6 +10,8 @@ import '../models/movie.dart';
 import '../models/user_profile.dart';
 import '../services/mock_data_service.dart';
 import '../services/socket_service.dart';
+import '../services/api_service.dart';
+import '../services/voice_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/reaction_overlay.dart';
 import 'add_friend_screen.dart';
@@ -17,11 +19,13 @@ import 'add_friend_screen.dart';
 class WatchPartyRoomScreen extends StatefulWidget {
   final Movie movie;
   final List<UserProfile> invitedFriends;
+  final String? roomId;
 
   const WatchPartyRoomScreen({
     super.key,
     required this.movie,
     required this.invitedFriends,
+    this.roomId,
   });
 
   @override
@@ -30,6 +34,8 @@ class WatchPartyRoomScreen extends StatefulWidget {
 
 class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     with TickerProviderStateMixin {
+  String? _roomId;
+  VoiceService? _voice;
   VideoPlayerController? _videoController;
   bool _isVideoInitialized = false;
   bool _isPlaying = true;
@@ -130,10 +136,15 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     _googleScrollController.addListener(_onGoogleScroll);
   }
 
-  void _initSocketSync() {
-    final roomId = 'ROOM-${widget.movie.id}';
+  Future<void> _initSocketSync() async {
+    _roomId = widget.roomId ?? await ApiService().createRoom(movie: widget.movie);
+    if (!mounted || _roomId == null) return;
+    final roomId = _roomId!;
     final socket = SocketService();
     socket.joinRoom(roomId);
+    _voice = VoiceService(socket);
+    _voice!.start(const []).catchError((_) {});
+    socket.onWebRtcSignal = (fromUserId, signal) => _voice?.handleSignal(fromUserId, signal);
 
     // Gerçek Zamanlı Katılımcı Listesi Güncelleme
     socket.onParticipantsUpdated = (participants) {
@@ -142,6 +153,8 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
         final otherParticipants = participants.where((p) => p.id != _currentUser.id).toList();
         _allParticipants = [_currentUser, ...otherParticipants];
       });
+      // Deterministic initiator prevents two peers from creating competing offers.
+      _voice?.start(participants.where((p) => p.id.compareTo(_currentUser.id) > 0).map((p) => p.id)).catchError((_) {});
     };
 
     // Video Senkronizasyonu (Oynatma / Duraklatma / Sarma)
@@ -283,6 +296,7 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     _controlsHideTimer?.cancel();
     _chatOverlayHideTimer?.cancel();
     SocketService().leaveRoom();
+    _voice?.dispose();
     _googleScrollController.dispose();
     _videoController?.dispose();
     _textController.dispose();
@@ -475,6 +489,7 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       isMicOn: _isMyMicOn,
       isSpeaking: _isMyMicOn,
     );
+    _voice?.setMuted(!_isMyMicOn);
   }
 
   void _triggerEmojiAnimationIfEmoji(String text) {
@@ -1349,7 +1364,9 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
                                         )
                                       else
                                         ElevatedButton(
-                                          onPressed: () {
+                                          onPressed: () async {
+                                            final sent = _roomId != null && await ApiService().inviteToRoom(roomId: _roomId!, targetId: f.id);
+                                            if (!sent || !context.mounted) return;
                                             setModalState(() {
                                               _pendingInviteIds.add(f.id);
                                             });
@@ -2570,4 +2587,3 @@ class _SendButtonState extends State<_SendButton> {
     );
   }
 }
-

@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../models/user_profile.dart';
 import '../services/mock_data_service.dart';
+import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import 'add_friend_screen.dart';
 
@@ -27,6 +28,19 @@ class _FriendsScreenState extends State<FriendsScreen>
     if (mounted) {
       setState(() {});
     }
+  }
+
+  Future<void> _openInvitations() async {
+    final invites = await ApiService().pendingInvitations();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(context: context, backgroundColor: const Color(0xFF1A1A22), builder: (sheetContext) => ListView(
+      padding: const EdgeInsets.all(20),
+      children: [const Text('Bekleyen Davetler', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)), const SizedBox(height: 16),
+        if (invites.isEmpty) const Text('Bekleyen davet yok.', style: TextStyle(color: Colors.white70)),
+        ...invites.map((invite) => ListTile(title: Text(invite['type'] == 'room' ? 'Oda daveti' : 'Arkadaşlık isteği', style: const TextStyle(color: Colors.white)), subtitle: Text('Gönderen: ${invite['fromUserId']}', style: const TextStyle(color: Colors.white60)), trailing: Wrap(children: [TextButton(onPressed: () async { await ApiService().respondToInvitation(invite['id'].toString(), false); if (sheetContext.mounted) Navigator.pop(sheetContext); }, child: const Text('Reddet')), ElevatedButton(onPressed: () async { await ApiService().respondToInvitation(invite['id'].toString(), true); if (sheetContext.mounted) Navigator.pop(sheetContext); }, child: const Text('Kabul'))]))),
+      ],
+    ));
+    if (mounted) setState(() {});
   }
 
   void _removeFriend(UserProfile profile) {
@@ -100,10 +114,7 @@ class _FriendsScreenState extends State<FriendsScreen>
                         color: Colors.white,
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(CupertinoIcons.person_add_solid, color: Colors.white),
-                      onPressed: _openAddFriendScreen,
-                    ),
+                    Row(children: [IconButton(icon: const Icon(CupertinoIcons.bell_fill, color: Colors.white), onPressed: _openInvitations), IconButton(icon: const Icon(CupertinoIcons.person_add_solid, color: Colors.white), onPressed: _openAddFriendScreen)]),
                   ],
                 ),
               ),

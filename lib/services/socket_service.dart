@@ -24,8 +24,13 @@ class SocketService {
   void Function(String emoji, String senderId)? onReactionReceived;
   void Function(String userId, bool? isMicOn, bool? isSpeaking)? onMicStatusChanged;
   void Function(String action, dynamic payload, String senderId)? onWebSync;
+  void Function(String fromUserId, Map<String, dynamic> signal)? onWebRtcSignal;
+  void Function(String message)? onAppError;
+
+  static const _configuredServer = String.fromEnvironment('SERVER_URL');
 
   static String get serverUrl {
+    if (_configuredServer.isNotEmpty) return _configuredServer;
     if (kIsWeb) return 'http://localhost:3000';
     try {
       if (Platform.isAndroid) {
@@ -54,6 +59,7 @@ class SocketService {
       _socket!.onConnect((_) {
         _isConnected = true;
         debugPrint('[SocketService] Sunucuya bağlandı: ${_socket!.id}');
+        _socket!.emit('identify', {'userId': MockDataService.currentUserId});
         if (_currentRoomId != null) {
           _emitJoin();
         }
@@ -82,6 +88,13 @@ class SocketService {
           onVideoSync?.call(isPlaying ? 'play' : 'pause', time, isPlaying, 'server');
         }
       });
+
+      _socket!.on('webrtc_signal', (data) {
+        if (data is Map && data['signal'] is Map) {
+          onWebRtcSignal?.call(data['fromUserId']?.toString() ?? '', Map<String, dynamic>.from(data['signal'] as Map));
+        }
+      });
+      _socket!.on('app_error', (data) => onAppError?.call((data is Map ? data['message'] : data)?.toString() ?? 'Bağlantı hatası'));
 
       // Yeni Kullanıcı Katıldı
       _socket!.on('room_user_joined', (data) {
@@ -184,13 +197,6 @@ class SocketService {
     if (_socket == null || _currentRoomId == null) return;
     _socket!.emit('join_room', {
       'roomId': _currentRoomId,
-      'user': {
-        'id': MockDataService.currentUserId,
-        'name': MockDataService.currentUserName,
-        'avatarUrl': MockDataService.currentUserAvatar,
-        'isMicOn': MockDataService.defaultMicOn,
-        'isSpeaking': false,
-      }
     });
   }
 
@@ -271,6 +277,11 @@ class SocketService {
       'payload': payload,
       'senderId': MockDataService.currentUserId,
     });
+  }
+
+  void sendWebRtcSignal(String toUserId, Map<String, dynamic> signal) {
+    if (_socket == null || _currentRoomId == null) return;
+    _socket!.emit('webrtc_signal', {'toUserId': toUserId, 'signal': signal});
   }
 
   /// Temizle

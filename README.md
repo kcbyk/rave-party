@@ -1,17 +1,32 @@
-# party_rave
+# Party Rave
 
-A new Flutter project.
+Private watch-party rooms with friend requests, accepted room invitations, synchronized playback, chat, and peer-to-peer WebRTC voice.
 
-## Getting Started
+## Run the backend
 
-This project is a starting point for a Flutter application.
+```powershell
+cd backend
+npm ci
+npm start
+```
 
-A few resources to get you started if this is your first Flutter project:
+The server stores users, friend requests, room invitations, and rooms in `backend/data/party-rave.json`. Set `DATA_FILE` to use a managed persistent volume in production. Set `CORS_ORIGIN` to the deployed app origin.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Run the app
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+The default server addresses are for a simulator/local development only. For two real phones, deploy the backend with HTTPS and launch each app with its public URL:
+
+```powershell
+flutter run --dart-define=SERVER_URL=https://your-api.example.com
+```
+
+Voice is WebRTC audio. It uses a public STUN server for development. Add your own authenticated TURN server before production so calls also work behind restrictive NATs.
+
+## Flow
+
+1. Both people open the app and their profile syncs.
+2. Search a user and send a friend request; the recipient accepts it.
+3. The host creates a room and sends a room invitation to a friend.
+4. The recipient accepts the room invitation, opens that room, and joins voice and playback synchronization.
+
+`flutter analyze` and `flutter test` are the local verification commands.

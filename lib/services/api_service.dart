@@ -12,7 +12,9 @@ class ApiService {
   ApiService._internal();
 
   /// Sunucu adresi: Emülatörde 10.0.2.2, Windows/Web/Masaüstünde localhost
+  static const _configuredServer = String.fromEnvironment('SERVER_URL');
   static String get baseUrl {
+    if (_configuredServer.isNotEmpty) return _configuredServer;
     if (kIsWeb) return 'http://localhost:3000';
     try {
       if (Platform.isAndroid) {
@@ -83,9 +85,8 @@ class ApiService {
 
   /// Arkadaş Ekle
   Future<bool> addFriend(UserProfile friend) async {
-    MockDataService.addFriend(friend);
     try {
-      final url = Uri.parse('$baseUrl/api/friends/add');
+      final url = Uri.parse('$baseUrl/api/friends/request');
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
@@ -94,10 +95,10 @@ class ApiService {
           'targetId': friend.id,
         }),
       ).timeout(const Duration(seconds: 4));
-      return response.statusCode == 200;
+      return response.statusCode == 201;
     } catch (e) {
       debugPrint('[ApiService] Arkadaş ekleme sunucu hatası: $e');
-      return true; // Yerelde eklendi
+      return false;
     }
   }
 
@@ -129,12 +130,7 @@ class ApiService {
         url,
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'hostUser': {
-            'id': MockDataService.currentUserId,
-            'name': MockDataService.currentUserName,
-            'avatarUrl': MockDataService.currentUserAvatar,
-            'isMicOn': MockDataService.defaultMicOn,
-          },
+          'hostUserId': MockDataService.currentUserId,
           'movie': {
             'id': movie.id,
             'title': movie.title,
@@ -146,11 +142,33 @@ class ApiService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        return data['roomId'] as String?;
+        return (data['room'] as Map?)?['id'] as String?;
       }
     } catch (e) {
       debugPrint('[ApiService] Oda oluşturma hatası: $e');
     }
     return null;
+  }
+
+  Future<bool> inviteToRoom({required String roomId, required String targetId}) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/rooms/$roomId/invite'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'userId': MockDataService.currentUserId, 'targetId': targetId}),
+      ).timeout(const Duration(seconds: 4));
+      return response.statusCode == 201;
+    } catch (_) { return false; }
+  }
+
+  Future<List<Map<String, dynamic>>> pendingInvitations() async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/api/invitations/${MockDataService.currentUserId}')).timeout(const Duration(seconds: 4));
+      if (response.statusCode == 200) return List<Map<String, dynamic>>.from((jsonDecode(response.body)['invitations'] as List).map((v) => Map<String, dynamic>.from(v as Map)));
+    } catch (_) {}
+    return [];
+  }
+  Future<bool> respondToInvitation(String invitationId, bool accept) async {
+    try { final r = await http.post(Uri.parse('$baseUrl/api/invitations/$invitationId/respond'), headers: {'Content-Type': 'application/json'}, body: jsonEncode({'userId': MockDataService.currentUserId, 'accept': accept})).timeout(const Duration(seconds: 4)); return r.statusCode == 200; } catch (_) { return false; }
   }
 }

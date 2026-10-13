@@ -1,10 +1,42 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:math';
 import '../models/movie.dart';
 import '../models/user_profile.dart';
 import '../models/chat_message.dart';
 
 class MockDataService {
+  static Future<void> initializeIdentity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedId = prefs.getString('user_id');
+    if (storedId == null) {
+      currentUserId = (100000 + Random.secure().nextInt(900000)).toString();
+      await prefs.setString('user_id', currentUserId);
+    } else { currentUserId = storedId; }
+    currentUserName = prefs.getString('user_name') ?? currentUserName;
+    currentUserBio = prefs.getString('user_bio') ?? currentUserBio;
+    currentUserAvatar = prefs.getString('user_avatar') ?? currentUserAvatar;
+  }
+
+  static Future<bool> isRegistered() async => (await SharedPreferences.getInstance()).getBool('registered') ?? false;
+
+  static Future<void> register({required String name, String bio = ''}) async {
+    currentUserName = name.trim();
+    currentUserBio = bio.trim();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_name', currentUserName);
+    await prefs.setString('user_bio', currentUserBio);
+    await prefs.setBool('registered', true);
+  }
+
+  static Future<void> persistProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_id', currentUserId);
+    await prefs.setString('user_name', currentUserName);
+    await prefs.setString('user_bio', currentUserBio);
+    await prefs.setString('user_avatar', currentUserAvatar);
+  }
   static bool isNetflixConnected = true;
   static String? connectedUserEmail = 'senol@netflix.com';
   static String currentUserName = 'Şenol';

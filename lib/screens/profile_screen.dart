@@ -45,6 +45,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           MockDataService.currentUserAvatar = pickedFile.path;
         });
         ApiService().syncUserProfile();
+        MockDataService.persistProfile();
         HapticFeedback.mediumImpact();
         if (mounted) {
           Navigator.pop(context);
@@ -184,6 +185,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                             MockDataService.currentUserAvatar = avatarUrl;
                           });
                           ApiService().syncUserProfile();
+                          MockDataService.persistProfile();
                           Navigator.pop(ctx);
                           HapticFeedback.lightImpact();
                         },
@@ -355,6 +357,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                   MockDataService.currentUserName = newName;
                 });
                 ApiService().syncUserProfile();
+                MockDataService.persistProfile();
                 Navigator.pop(ctx);
                 HapticFeedback.lightImpact();
               }
@@ -432,6 +435,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                 MockDataService.currentUserId = randomId;
               });
               ApiService().syncUserProfile();
+              MockDataService.persistProfile();
               Navigator.pop(ctx);
               _copyIdToClipboard();
             },
@@ -452,6 +456,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                   MockDataService.currentUserId = newId;
                 });
                 ApiService().syncUserProfile();
+                MockDataService.persistProfile();
                 Navigator.pop(ctx);
                 _copyIdToClipboard();
               }
