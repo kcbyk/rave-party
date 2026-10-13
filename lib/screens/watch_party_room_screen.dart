@@ -284,33 +284,58 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       final controller = WebViewController();
       controller.setJavaScriptMode(JavaScriptMode.unrestricted);
       controller.setBackgroundColor(Colors.black);
+
+      // Rave gibi: mobil Chrome UA - DRM pipeline'ı aktive etmek için
       controller.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36',
       );
 
+      controller.setNavigationDelegate(
+        NavigationDelegate(
+          onNavigationRequest: (req) {
+            final url = req.url;
+            // Netflix / YouTube native app açma girişimlerini engelle
+            if (url.startsWith('intent:') || url.startsWith('netflix:') ||
+                url.startsWith('market:') || url.startsWith('youtube:')) {
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
+          onPageFinished: (url) {
+            // Sayfa yüklenince medya izinlerini tetikle (DRM için)
+            controller.runJavaScript('''
+              (function() {
+                // DOM storage ve cookie erişimi
+                try { localStorage.setItem('rave_init', '1'); } catch(e) {}
+                // Otomatik oynatmaya izin ver
+                document.addEventListener('click', function(){}, {once: true});
+              })();
+            ''');
+          },
+        ),
+      );
+
+      // Rave'in yaklaşımı: doğrudan platforma yönlendir
+      // YouTube: video URL'ini doğrudan YouTube sayfası olarak aç
+      // Netflix: browse sayfasını aç (kullanıcı zaten giriş yapmış)
       final ytId = movie.youTubeVideoId;
       if (ytId != null && ytId.isNotEmpty) {
-        final html = '''
-<!DOCTYPE html>
-<html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <style>
-    * { margin:0; padding:0; box-sizing:border-box; background:#000; overflow:hidden; }
-    html, body { width:100%; height:100%; }
-    iframe { width:100%; height:100%; border:none; }
-  </style>
-</head>
-<body>
-  <iframe id="player"
-          src="https://www.youtube.com/embed/$ytId?autoplay=1&playsinline=1&enablejsapi=1&rel=0&controls=1"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowfullscreen>
-  </iframe>
-</body>
-</html>
-''';
-        controller.loadHtmlString(html, baseUrl: 'https://www.youtube.com');
+        // YouTube'da video sayfasını mobil olarak aç (m.youtube.com)
+        controller.loadRequest(Uri.parse('https://m.youtube.com/watch?v=$ytId&autoplay=1'));
+      } else if (movie.videoUrl.contains('youtube.com') || movie.videoUrl.contains('youtu.be')) {
+        // Direkt YouTube URL'i aç
+        String ytUrl = movie.videoUrl;
+        if (ytUrl.contains('youtu.be/')) {
+          final id = ytUrl.split('youtu.be/').last.split('?').first;
+          ytUrl = 'https://m.youtube.com/watch?v=$id&autoplay=1';
+        } else if (ytUrl.contains('youtube.com/watch')) {
+          ytUrl = ytUrl.replaceFirst('www.youtube.com', 'm.youtube.com');
+          if (!ytUrl.contains('autoplay')) ytUrl += '&autoplay=1';
+        }
+        controller.loadRequest(Uri.parse(ytUrl));
+      } else if (movie.videoUrl.contains('netflix.com')) {
+        // Netflix: /watch/ URL'ini aç (DRM native WebView ile çalışır)
+        controller.loadRequest(Uri.parse(movie.videoUrl));
       } else {
         controller.loadRequest(Uri.parse(movie.videoUrl));
       }

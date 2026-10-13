@@ -34,8 +34,21 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
       final controller = WebViewController();
       controller.setJavaScriptMode(JavaScriptMode.unrestricted);
       controller.setBackgroundColor(Colors.black);
+      // Mobil YouTube deneyimi için doğru UA - Rave gibi
+      controller.setUserAgent(
+        'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36',
+      );
       controller.setNavigationDelegate(
         NavigationDelegate(
+          onNavigationRequest: (request) {
+            final url = request.url;
+            // Native app açma girişimlerini engelle
+            if (url.startsWith('intent:') || url.startsWith('youtube:') ||
+                url.startsWith('market:') || url.startsWith('vnd.youtube:')) {
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
           onProgress: (progress) {
             if (mounted) {
               setState(() {
@@ -66,7 +79,7 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
           },
         ),
       );
-      // Giriş yapmadan doğrudan YouTube mobil sitesine gider
+      // YouTube mobil sitesine git
       controller.loadRequest(Uri.parse(widget.initialUrl));
 
       setState(() {
@@ -126,12 +139,12 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
     } catch (_) {}
 
     title = title.replaceAll('- YouTube', '').trim();
-    if (title.isEmpty) title = 'YouTube Videosu';
+    if (title.isEmpty || title == 'YouTube') title = 'YouTube Videosu';
 
     String? videoId;
     if (currentUrl.isNotEmpty) {
       final regExp = RegExp(
-        r'(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([\w-]{11})',
+        r'(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([\w-]{11})',
         caseSensitive: false,
       );
       final match = regExp.firstMatch(currentUrl);
@@ -140,6 +153,8 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
       }
     }
 
+    // Rave gibi: videonun m.youtube.com URL'ini oda ekranına gönder
+    // Oda ekranı bunu kendi WebView'ında açacak - "video kullanılamıyor" olmaz
     final Movie videoToPlay;
     if (videoId != null && videoId.isNotEmpty) {
       final thumb = 'https://img.youtube.com/vi/$videoId/hqdefault.jpg';
@@ -152,15 +167,44 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
         posterUrl: thumb,
         backdropUrl: thumb,
         description: 'YouTube üzerinden odaya aktarılan video',
-        videoUrl: 'https://www.youtube.com/watch?v=$videoId',
+        // m.youtube.com URL'i direkt WebView'da açılacak - embed yok, kısıtlama yok
+        videoUrl: 'https://m.youtube.com/watch?v=$videoId',
+        releaseYear: '2026',
+        tags: ['YouTube', 'Canlı', 'Oda'],
+      );
+    } else if (currentUrl.contains('youtube.com') || currentUrl.contains('youtu.be')) {
+      // URL var ama video ID parse edilemedi - direkt URL'i kullan
+      videoToPlay = Movie(
+        id: 'yt_${DateTime.now().millisecondsSinceEpoch}',
+        title: title,
+        category: 'YouTube',
+        duration: 'YouTube',
+        rating: 4.9,
+        posterUrl: 'https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=600&auto=format&fit=crop&q=80',
+        backdropUrl: 'https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=1200&auto=format&fit=crop&q=80',
+        description: 'YouTube üzerinden odaya aktarılan video',
+        videoUrl: currentUrl.replaceFirst('www.youtube.com', 'm.youtube.com'),
         releaseYear: '2026',
         tags: ['YouTube', 'Canlı', 'Oda'],
       );
     } else {
-      videoToPlay = MockDataService.youtubeVideos.first;
+      // Hiçbir video açık değilse YouTube ana sayfasını aç
+      videoToPlay = Movie(
+        id: 'yt_home',
+        title: 'YouTube',
+        category: 'YouTube',
+        duration: 'YouTube',
+        rating: 4.9,
+        posterUrl: 'https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=600&auto=format&fit=crop&q=80',
+        backdropUrl: 'https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=1200&auto=format&fit=crop&q=80',
+        description: 'YouTube',
+        videoUrl: 'https://m.youtube.com',
+        releaseYear: '2026',
+        tags: ['YouTube', 'Canlı', 'Oda'],
+      );
     }
 
-    // Arka plandaki YouTube sesinin odaya geçtikten sonra çalmasını engelle
+    // Arka plandaki YouTube sesini durdur
     try {
       await _controller?.runJavaScript('''
         (function() {
@@ -168,7 +212,15 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
           videos.forEach(function(v) {
             v.pause();
             v.muted = true;
+            v.volume = 0;
           });
+          // YouTube player API ile durdur
+          if (window.ytInitialPlayerResponse) {
+            try {
+              var player = document.querySelector('.html5-main-video');
+              if (player) { player.pause(); player.muted = true; }
+            } catch(e) {}
+          }
         })();
       ''');
     } catch (_) {}

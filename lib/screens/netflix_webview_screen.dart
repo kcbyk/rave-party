@@ -137,34 +137,41 @@ class _NetflixWebViewScreenState extends State<NetflixWebViewScreen> {
 
   Future<void> _transferCurrentContentToRoom() async {
     String currentUrl = '';
-    String title = 'Netflix İçeriği';
+    String title = 'Netflix';
     try {
       currentUrl = await _controller?.currentUrl() ?? '';
-      title = await _controller?.getTitle() ?? 'Netflix İçeriği';
+      title = await _controller?.getTitle() ?? 'Netflix';
     } catch (_) {}
 
-    title = title.replaceAll('- Netflix', '').trim();
-    if (title.isEmpty) title = 'Netflix İçeriği';
+    title = title.replaceAll('- Netflix', '').replaceAll('| Netflix', '').trim();
+    if (title.isEmpty || title == 'Netflix') title = 'Netflix İçeriği';
 
-    final Movie contentToPlay;
-    if (currentUrl.isNotEmpty && (currentUrl.contains('/watch/') || currentUrl.contains('/title/'))) {
-      contentToPlay = Movie(
-        id: 'netflix_${DateTime.now().millisecondsSinceEpoch}',
-        title: title,
-        category: 'Netflix',
-        duration: 'Netflix Yayını',
-        rating: 4.8,
-        posterUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=600&auto=format&fit=crop&q=80',
-        backdropUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1200&auto=format&fit=crop&q=80',
-        description: 'Netflix üzerinden odaya aktarılan içerik',
-        videoUrl: currentUrl,
-        releaseYear: '2026',
-        tags: ['Netflix', 'Canlı', 'Oda'],
-      );
+    // Netflix'te bir içerik izleniyorsa o URL'i, izlenmiyorsa browse sayfasını al
+    // Rave gibi: oda ekranı aynı URL'i kendi WebView'ında açacak
+    final String videoUrl;
+    if (currentUrl.contains('netflix.com/watch/') || currentUrl.contains('netflix.com/title/')) {
+      videoUrl = currentUrl;
     } else {
-      contentToPlay = MockDataService.netflixMovies.first;
+      // İzlenecek içerik seçilmemişse browse'a gönder, kullanıcı seçsin
+      videoUrl = 'https://www.netflix.com/browse';
+      title = 'Netflix';
     }
 
+    final contentToPlay = Movie(
+      id: 'netflix_${DateTime.now().millisecondsSinceEpoch}',
+      title: title,
+      category: 'Netflix',
+      duration: 'Netflix Yayını',
+      rating: 4.8,
+      posterUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=600&auto=format&fit=crop&q=80',
+      backdropUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1200&auto=format&fit=crop&q=80',
+      description: 'Netflix üzerinden odaya aktarılan içerik',
+      videoUrl: videoUrl,
+      releaseYear: '2026',
+      tags: ['Netflix', 'Canlı', 'Oda'],
+    );
+
+    // Netflix videosunu duraklat
     try {
       await _controller?.runJavaScript('''
         (function() {
