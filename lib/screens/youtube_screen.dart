@@ -91,12 +91,95 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
     );
   }
 
-  void _directStartParty(Movie video) {
+  void _directStartParty(Movie video) async {
+    try {
+      await _controller?.runJavaScript('''
+        (function() {
+          var videos = document.querySelectorAll('video');
+          videos.forEach(function(v) {
+            v.pause();
+            v.muted = true;
+          });
+        })();
+      ''');
+    } catch (_) {}
+
+    if (!mounted) return;
+
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => WatchPartyRoomScreen(
           movie: video,
+          invitedFriends: const [],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _transferCurrentVideoToRoom() async {
+    String currentUrl = '';
+    String title = 'YouTube Videosu';
+    try {
+      currentUrl = await _controller?.currentUrl() ?? '';
+      title = await _controller?.getTitle() ?? 'YouTube Videosu';
+    } catch (_) {}
+
+    title = title.replaceAll('- YouTube', '').trim();
+    if (title.isEmpty) title = 'YouTube Videosu';
+
+    String? videoId;
+    if (currentUrl.isNotEmpty) {
+      final regExp = RegExp(
+        r'(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([\w-]{11})',
+        caseSensitive: false,
+      );
+      final match = regExp.firstMatch(currentUrl);
+      if (match != null && match.groupCount >= 1) {
+        videoId = match.group(1);
+      }
+    }
+
+    final Movie videoToPlay;
+    if (videoId != null && videoId.isNotEmpty) {
+      final thumb = 'https://img.youtube.com/vi/$videoId/hqdefault.jpg';
+      videoToPlay = Movie(
+        id: 'yt_$videoId',
+        title: title,
+        category: 'YouTube',
+        duration: 'YouTube',
+        rating: 4.9,
+        posterUrl: thumb,
+        backdropUrl: thumb,
+        description: 'YouTube üzerinden odaya aktarılan video',
+        videoUrl: 'https://www.youtube.com/watch?v=$videoId',
+        releaseYear: '2026',
+        tags: ['YouTube', 'Canlı', 'Oda'],
+      );
+    } else {
+      videoToPlay = MockDataService.youtubeVideos.first;
+    }
+
+    // Arka plandaki YouTube sesinin odaya geçtikten sonra çalmasını engelle
+    try {
+      await _controller?.runJavaScript('''
+        (function() {
+          var videos = document.querySelectorAll('video');
+          videos.forEach(function(v) {
+            v.pause();
+            v.muted = true;
+          });
+        })();
+      ''');
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => WatchPartyRoomScreen(
+          movie: videoToPlay,
           invitedFriends: const [],
         ),
       ),
@@ -166,10 +249,7 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
                 left: 20,
                 right: 20,
                 child: ElevatedButton.icon(
-                  onPressed: () {
-                    final videoToPlay = MockDataService.youtubeVideos.first;
-                    _directStartParty(videoToPlay);
-                  },
+                  onPressed: _transferCurrentVideoToRoom,
                   icon: const Icon(CupertinoIcons.play_arrow_solid, color: Colors.white, size: 18),
                   label: const Text(
                     'Videoyu Odaya Aktar & İzle',

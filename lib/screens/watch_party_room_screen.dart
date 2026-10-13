@@ -37,6 +37,8 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
   String? _roomId;
   VoiceService? _voice;
   VideoPlayerController? _videoController;
+  WebViewController? _webPlayerController;
+  bool _isWebVideo = false;
   bool _isVideoInitialized = false;
   bool _isPlaying = true;
   bool _isMuted = false;
@@ -163,7 +165,23 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       setState(() {
         _currentSeconds = time.clamp(0.0, _totalSeconds);
         _isPlaying = isPlaying;
-        if (_videoController != null && _isVideoInitialized) {
+        if (_isWebVideo && _webPlayerController != null) {
+          final cmd = isPlaying ? 'playVideo' : 'pauseVideo';
+          _webPlayerController?.runJavaScript('''
+            (function() {
+              var iframe = document.getElementById('player');
+              if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage('{"event":"command","func":"seekTo","args":[${time.toInt()}, true]}', '*');
+                iframe.contentWindow.postMessage('{"event":"command","func":"$cmd","args":""}', '*');
+              }
+              var v = document.querySelector('video');
+              if (v) {
+                v.currentTime = ${time.toInt()};
+                if ('$cmd' === 'playVideo') { v.play(); } else { v.pause(); }
+              }
+            })();
+          ''');
+        } else if (_videoController != null && _isVideoInitialized) {
           _videoController!.seekTo(Duration(seconds: time.toInt()));
           if (isPlaying) {
             _videoController!.play();
@@ -223,6 +241,17 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
   }
 
   void _initVideoPlayer() {
+    final movie = widget.movie;
+    final isYt = movie.isYouTube || movie.youTubeVideoId != null;
+    final isWeb = isYt || movie.videoUrl.contains('netflix.com');
+
+    if (isWeb) {
+      _isWebVideo = true;
+      _initWebPlayer(movie);
+      return;
+    }
+
+    _isWebVideo = false;
     _videoController = VideoPlayerController.networkUrl(
       Uri.parse(widget.movie.videoUrl),
     )..initialize().then((_) {
@@ -248,6 +277,49 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
         });
       }
     });
+  }
+
+  void _initWebPlayer(Movie movie) {
+    try {
+      final controller = WebViewController();
+      controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+      controller.setBackgroundColor(Colors.black);
+      controller.setUserAgent(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      );
+
+      final ytId = movie.youTubeVideoId;
+      if (ytId != null && ytId.isNotEmpty) {
+        final html = '''
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; background:#000; overflow:hidden; }
+    html, body { width:100%; height:100%; }
+    iframe { width:100%; height:100%; border:none; }
+  </style>
+</head>
+<body>
+  <iframe id="player"
+          src="https://www.youtube.com/embed/$ytId?autoplay=1&playsinline=1&enablejsapi=1&rel=0&controls=1"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowfullscreen>
+  </iframe>
+</body>
+</html>
+''';
+        controller.loadHtmlString(html, baseUrl: 'https://www.youtube.com');
+      } else {
+        controller.loadRequest(Uri.parse(movie.videoUrl));
+      }
+
+      setState(() {
+        _webPlayerController = controller;
+        _isVideoInitialized = true;
+      });
+    } catch (_) {}
   }
 
   void _startPlaybackTimer() {
@@ -299,6 +371,9 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     _voice?.dispose();
     _googleScrollController.dispose();
     _videoController?.dispose();
+    try {
+      _webPlayerController?.loadRequest(Uri.parse('about:blank'));
+    } catch (_) {}
     _textController.dispose();
     _inputFocus.dispose();
     _scrollController.dispose();
@@ -392,12 +467,28 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
   void _startMovieInRoom(Movie selectedMovie) {
     _videoController?.pause();
     _videoController?.dispose();
+    _videoController = null;
+    try {
+      _webPlayerController?.loadRequest(Uri.parse('about:blank'));
+    } catch (_) {}
+    _webPlayerController = null;
+
     setState(() {
       _isVideoInitialized = false;
       _isGoogleWebMode = false;
       _currentSeconds = 0;
     });
 
+    final isYt = selectedMovie.isYouTube || selectedMovie.youTubeVideoId != null;
+    final isWeb = isYt || selectedMovie.videoUrl.contains('netflix.com');
+
+    if (isWeb) {
+      _isWebVideo = true;
+      _initWebPlayer(selectedMovie);
+      return;
+    }
+
+    _isWebVideo = false;
     _videoController = VideoPlayerController.networkUrl(
       Uri.parse(selectedMovie.videoUrl),
     )..initialize().then((_) {
@@ -422,7 +513,21 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     HapticFeedback.lightImpact();
     setState(() {
       _isPlaying = !_isPlaying;
-      if (_videoController != null && _isVideoInitialized) {
+      if (_isWebVideo && _webPlayerController != null) {
+        final cmd = _isPlaying ? 'playVideo' : 'pauseVideo';
+        _webPlayerController?.runJavaScript('''
+          (function() {
+            var iframe = document.getElementById('player');
+            if (iframe && iframe.contentWindow) {
+              iframe.contentWindow.postMessage('{"event":"command","func":"$cmd","args":""}', '*');
+            }
+            var v = document.querySelector('video');
+            if (v) {
+              if ('$cmd' === 'playVideo') { v.play(); } else { v.pause(); }
+            }
+          })();
+        ''');
+      } else if (_videoController != null && _isVideoInitialized) {
         if (_isPlaying) {
           _videoController!.play();
         } else {
@@ -442,7 +547,18 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     HapticFeedback.selectionClick();
     setState(() {
       _currentSeconds = (_currentSeconds + seconds).clamp(0.0, _totalSeconds);
-      if (_videoController != null && _isVideoInitialized) {
+      if (_isWebVideo && _webPlayerController != null) {
+        _webPlayerController?.runJavaScript('''
+          (function() {
+            var iframe = document.getElementById('player');
+            if (iframe && iframe.contentWindow) {
+              iframe.contentWindow.postMessage('{"event":"command","func":"seekTo","args":[${_currentSeconds.toInt()}, true]}', '*');
+            }
+            var v = document.querySelector('video');
+            if (v) { v.currentTime = ${_currentSeconds.toInt()}; }
+          })();
+        ''');
+      } else if (_videoController != null && _isVideoInitialized) {
         _videoController!.seekTo(Duration(seconds: _currentSeconds.toInt()));
       }
       _showControls = true;
@@ -1649,7 +1765,9 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
             alignment: Alignment.center,
             children: [
               // Video Akışı veya Arka Plan Görseli
-              if (_isVideoInitialized && _videoController != null)
+              if (_isWebVideo && _webPlayerController != null)
+                WebViewWidget(controller: _webPlayerController!)
+              else if (_isVideoInitialized && _videoController != null)
                 VideoPlayer(_videoController!)
               else
                 Image.network(
@@ -1668,7 +1786,7 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
                 duration: const Duration(milliseconds: 200),
                 color: _showControls
                     ? Colors.black.withValues(alpha: 0.5)
-                    : Colors.black.withValues(alpha: 0.1),
+                    : (_isWebVideo ? Colors.transparent : Colors.black.withValues(alpha: 0.1)),
               ),
 
               // Üst Detay Bilgileri & Kontroller (Yatay modda sol üst mikrofon, sağ üst çark ayarları)
