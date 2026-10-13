@@ -1945,7 +1945,8 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
                 ),
 
               // Orta Oynatma Kontrolleri (-10s / Play-Pause / +10s)
-              if (_showControls)
+              // Web videolarında (YouTube/Netflix) kendi kontrolleri olduğu için gizle
+              if (_showControls && !_isWebVideo)
                 Center(
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -1992,40 +1993,41 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
                   ),
                 ),
 
-              // Canlı Altyazı Katmanı
-              Builder(
-                builder: (context) {
-                  final subtitle = _getCurrentSubtitleText();
-                  if (subtitle == null) return const SizedBox.shrink();
-                  return Positioned(
-                    bottom: _showControls ? 58 : 16,
-                    left: 20,
-                    right: 20,
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.72),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          subtitle,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 0.2,
+              // Canlı Altyazı Katmanı — sadece direct video modunda
+              if (!_isWebVideo)
+                Builder(
+                  builder: (context) {
+                    final subtitle = _getCurrentSubtitleText();
+                    if (subtitle == null) return const SizedBox.shrink();
+                    return Positioned(
+                      bottom: _showControls ? 58 : 16,
+                      left: 20,
+                      right: 20,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.72),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            subtitle,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.2,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  );
-                },
-              ),
+                    );
+                  },
+                ),
 
-              // Alt Oynatıcı Çubuğu (Scrubber + Süre + Ses)
-              if (_showControls)
+              // Alt Oynatıcı Çubuğu — sadece direct video modunda göster
+              if (_showControls && !_isWebVideo)
                 Positioned(
                   left: 12,
                   right: 12,
@@ -2046,23 +2048,27 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
                             overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
                             overlayColor: AppTheme.netflixRed.withValues(alpha: 0.2),
                           ),
-                          child: Slider(
-                            value: _currentSeconds.clamp(0.0, _totalSeconds),
-                            min: 0.0,
-                            max: _totalSeconds,
-                            onChangeStart: (val) {
-                              _controlsHideTimer?.cancel();
-                            },
-                            onChanged: (val) {
-                              setState(() {
-                                _currentSeconds = val;
-                              });
-                            },
-                            onChangeEnd: (val) {
-                              _videoController?.seekTo(Duration(seconds: val.toInt()));
-                              _startControlsTimer();
-                            },
-                          ),
+                          child: Builder(builder: (context) {
+                            final total = _videoController?.value.duration.inSeconds.toDouble() ?? _totalSeconds;
+                            final current = _videoController?.value.position.inSeconds.toDouble() ?? _currentSeconds;
+                            return Slider(
+                              value: current.clamp(0.0, total),
+                              min: 0.0,
+                              max: total > 0 ? total : 1.0,
+                              onChangeStart: (val) {
+                                _controlsHideTimer?.cancel();
+                              },
+                              onChanged: (val) {
+                                setState(() {
+                                  _currentSeconds = val;
+                                });
+                              },
+                              onChangeEnd: (val) {
+                                _videoController?.seekTo(Duration(seconds: val.toInt()));
+                                _startControlsTimer();
+                              },
+                            );
+                          }),
                         ),
                       ),
 
@@ -2071,15 +2077,19 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
                       padding: const EdgeInsets.symmetric(horizontal: 4),
                       child: Row(
                         children: [
-                          Text(
-                            '${_formatDuration(_currentSeconds.toInt())} / ${_formatDuration(_totalSeconds.toInt())}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              fontFeatures: [FontFeature.tabularFigures()],
-                            ),
-                          ),
+                          Builder(builder: (context) {
+                            final total = _videoController?.value.duration.inSeconds ?? _totalSeconds.toInt();
+                            final current = _videoController?.value.position.inSeconds ?? _currentSeconds.toInt();
+                            return Text(
+                              '${_formatDuration(current)} / ${_formatDuration(total)}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
+                            );
+                          }),
                           const Spacer(),
 
                           // Hız Rozeti
@@ -2153,6 +2163,13 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
 
     if (isFullScreen || !_isChatVisible) {
       return playerBody;
+    }
+    // Web video (YouTube/Netflix): tam yükseklik — kendi player'ı zaten var
+    if (_isWebVideo) {
+      return SizedBox(
+        height: MediaQuery.of(context).size.height * 0.45,
+        child: playerBody,
+      );
     }
     return AspectRatio(
       aspectRatio: 16 / 9,

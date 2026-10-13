@@ -36,8 +36,7 @@ class _NetflixWebViewScreenState extends State<NetflixWebViewScreen> {
       controller.setJavaScriptMode(JavaScriptMode.unrestricted);
       controller.setBackgroundColor(Colors.black);
 
-      // Desktop Chrome User-Agent vererek Netflix'in "Uygulamayı Aç / Hesabı Yönet"
-      // mobil engelleyici ekranını göstermesini engelliyoruz.
+      // Desktop Chrome UA: "Netflix uygulamasıyla daha güzel" ekranını engelle
       controller.setUserAgent(
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       );
@@ -46,55 +45,59 @@ class _NetflixWebViewScreenState extends State<NetflixWebViewScreen> {
         NavigationDelegate(
           onNavigationRequest: (NavigationRequest request) {
             final url = request.url;
-            // Native uygulama açma girişimlerini engelle (webde kalsın)
+            // Native uygulama açma girişimlerini engelle
             if (url.startsWith('netflix:') || url.startsWith('intent:') || url.startsWith('market:')) {
               return NavigationDecision.prevent;
             }
             return NavigationDecision.navigate;
           },
           onProgress: (progress) {
-            if (mounted) {
-              setState(() {
-                _loadingProgress = progress;
-              });
-            }
+            if (mounted) setState(() => _loadingProgress = progress);
           },
           onPageStarted: (url) {
-            if (mounted) {
-              setState(() {
-                _hasError = false;
-              });
-            }
-            // Eğer giriş sonrası doğrudan mobil 'your-account' ekranına yönlenirse browse sayfasına al
-            if (url.contains('/youraccount') || url.contains('/your-account') || url.contains('/app')) {
+            if (mounted) setState(() => _hasError = false);
+
+            // Hesap/uygulama sayfalarını browse'a yönlendir
+            if (url.contains('/youraccount') || url.contains('/your-account') ||
+                url.contains('nflxso.net') || url.contains('/app')) {
               controller.loadRequest(Uri.parse('https://www.netflix.com/browse'));
+            }
+
+            // Rave gibi: /watch/ URL'ine girilince otomatik odaya geç
+            if (url.contains('netflix.com/watch/')) {
+              _openNetflixInRoom(url);
             }
           },
           onPageFinished: (url) {
-            if (mounted) {
-              setState(() {
-                _loadingProgress = 100;
-              });
-            }
-            // Sayfa açıldığında mobil uygulama engelleyici mesaj varsa otomatik olarak browse'a geç
+            if (mounted) setState(() => _loadingProgress = 100);
+
+            // "Netflix uygulamasıyla daha güzel" / uygulama açma ekranlarını gizle
             controller.runJavaScript('''
               (function() {
-                var body = document.body ? document.body.innerText : '';
-                if (body.indexOf('Netflix uygulamasıyla daha güzel') !== -1 ||
-                    body.indexOf('Uygulamayı aç') !== -1 ||
-                    body.indexOf('Hesabı yönet') !== -1) {
+                // App-redirect banner'larını kaldır
+                var selectors = [
+                  '.app-redirect', '[data-uia="app-banner"]', '.mobile-app-banner',
+                  '[class*="app-redirect"]', '[class*="open-app"]',
+                  '[data-uia="open-in-app-button"]', '[data-uia="app-cta"]'
+                ];
+                selectors.forEach(function(sel) {
+                  document.querySelectorAll(sel).forEach(function(el) { el.remove(); });
+                });
+
+                // "Netflix uygulamasıyla daha güzel" metni olan sayfayı browse'a al
+                var bodyText = document.body ? document.body.innerText : '';
+                if (bodyText.indexOf('uygulamasıyla') !== -1 ||
+                    bodyText.indexOf('Uygulamayı aç') !== -1 ||
+                    bodyText.indexOf('Hesabı yönet') !== -1 ||
+                    bodyText.indexOf('app is better') !== -1) {
                   window.location.href = 'https://www.netflix.com/browse';
                 }
-                var banners = document.querySelectorAll('.app-redirect, [data-uia="app-banner"], .mobile-app-banner');
-                banners.forEach(function(el) { el.remove(); });
               })();
             ''');
           },
           onWebResourceError: (error) {
             if (mounted && (error.isForMainFrame ?? true)) {
-              setState(() {
-                _hasError = true;
-              });
+              setState(() => _hasError = true);
             }
           },
         ),
@@ -109,6 +112,51 @@ class _NetflixWebViewScreenState extends State<NetflixWebViewScreen> {
         _hasError = true;
       });
     }
+  }
+
+  // Rave gibi: Netflix /watch/ URL'ini tespit edince odaya geç
+  Future<void> _openNetflixInRoom(String url) async {
+    // Videoyu durdur
+    try {
+      await _controller?.runJavaScript('''
+        document.querySelectorAll('video').forEach(function(v) {
+          v.pause(); v.muted = true;
+        });
+      ''');
+    } catch (_) {}
+
+    String title = 'Netflix';
+    try {
+      title = (await _controller?.getTitle() ?? 'Netflix')
+          .replaceAll('- Netflix', '').replaceAll('| Netflix', '').trim();
+      if (title.isEmpty) title = 'Netflix İçeriği';
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    final contentToPlay = Movie(
+      id: 'netflix_${DateTime.now().millisecondsSinceEpoch}',
+      title: title,
+      category: 'Netflix',
+      duration: 'Netflix Yayını',
+      rating: 4.8,
+      posterUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=600&auto=format&fit=crop&q=80',
+      backdropUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1200&auto=format&fit=crop&q=80',
+      description: 'Netflix içeriği',
+      videoUrl: url,
+      releaseYear: '2026',
+      tags: ['Netflix', 'Canlı', 'Oda'],
+    );
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => WatchPartyRoomScreen(
+          movie: contentToPlay,
+          invitedFriends: const [],
+        ),
+      ),
+    );
   }
 
   void _openMovieDetail(Movie movie) {
@@ -135,64 +183,7 @@ class _NetflixWebViewScreenState extends State<NetflixWebViewScreen> {
     );
   }
 
-  Future<void> _transferCurrentContentToRoom() async {
-    String currentUrl = '';
-    String title = 'Netflix';
-    try {
-      currentUrl = await _controller?.currentUrl() ?? '';
-      title = await _controller?.getTitle() ?? 'Netflix';
-    } catch (_) {}
 
-    title = title.replaceAll('- Netflix', '').replaceAll('| Netflix', '').trim();
-    if (title.isEmpty || title == 'Netflix') title = 'Netflix İçeriği';
-
-    // Netflix'te bir içerik izleniyorsa o URL'i, izlenmiyorsa browse sayfasını al
-    // Rave gibi: oda ekranı aynı URL'i kendi WebView'ında açacak
-    final String videoUrl;
-    if (currentUrl.contains('netflix.com/watch/') || currentUrl.contains('netflix.com/title/')) {
-      videoUrl = currentUrl;
-    } else {
-      // İzlenecek içerik seçilmemişse browse'a gönder, kullanıcı seçsin
-      videoUrl = 'https://www.netflix.com/browse';
-      title = 'Netflix';
-    }
-
-    final contentToPlay = Movie(
-      id: 'netflix_${DateTime.now().millisecondsSinceEpoch}',
-      title: title,
-      category: 'Netflix',
-      duration: 'Netflix Yayını',
-      rating: 4.8,
-      posterUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=600&auto=format&fit=crop&q=80',
-      backdropUrl: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1200&auto=format&fit=crop&q=80',
-      description: 'Netflix üzerinden odaya aktarılan içerik',
-      videoUrl: videoUrl,
-      releaseYear: '2026',
-      tags: ['Netflix', 'Canlı', 'Oda'],
-    );
-
-    // Netflix videosunu duraklat
-    try {
-      await _controller?.runJavaScript('''
-        (function() {
-          var v = document.querySelectorAll('video');
-          v.forEach(function(video) { video.pause(); });
-        })();
-      ''');
-    } catch (_) {}
-
-    if (!mounted) return;
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => WatchPartyRoomScreen(
-          movie: contentToPlay,
-          invitedFriends: const [],
-        ),
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -249,29 +240,6 @@ class _NetflixWebViewScreenState extends State<NetflixWebViewScreen> {
                 ),
               ),
             ),
-
-            // Web Görünümünde Altta Odaya Aktar Butonu
-            if (_controller != null && !_hasError)
-              Positioned(
-                bottom: 16,
-                left: 20,
-                right: 20,
-                child: ElevatedButton.icon(
-                  onPressed: _transferCurrentContentToRoom,
-                  icon: const Icon(CupertinoIcons.play_arrow_solid, color: Colors.white, size: 18),
-                  label: const Text(
-                    'İçeriği Odaya Aktar & Birlikte İzle',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.netflixRed,
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    elevation: 6,
-                    shadowColor: AppTheme.netflixRed.withValues(alpha: 0.5),
-                  ),
-                ),
-              ),
           ],
         ),
       ),

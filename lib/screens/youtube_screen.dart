@@ -50,36 +50,28 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
             return NavigationDecision.navigate;
           },
           onProgress: (progress) {
-            if (mounted) {
-              setState(() {
-                _loadingProgress = progress;
-              });
-            }
+            if (mounted) setState(() => _loadingProgress = progress);
           },
           onPageStarted: (url) {
-            if (mounted) {
-              setState(() {
-                _hasError = false;
-              });
+            if (mounted) setState(() => _hasError = false);
+
+            // Rave gibi: Video URL'ini tespit edince otomatik odaya geç
+            final videoId = _extractYouTubeId(url);
+            if (videoId != null && mounted) {
+              _openVideoInRoom(url, videoId);
             }
           },
           onPageFinished: (url) {
-            if (mounted) {
-              setState(() {
-                _loadingProgress = 100;
-              });
-            }
+            if (mounted) setState(() => _loadingProgress = 100);
           },
           onWebResourceError: (error) {
             if (mounted && (error.isForMainFrame ?? true)) {
-              setState(() {
-                _hasError = true;
-              });
+              setState(() => _hasError = true);
             }
           },
         ),
       );
-      // YouTube mobil sitesine git
+      // YouTube mobil ana sayfasına git
       controller.loadRequest(Uri.parse(widget.initialUrl));
 
       setState(() {
@@ -90,6 +82,64 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
         _hasError = true;
       });
     }
+  }
+
+  // YouTube video ID'sini URL'den çıkar
+  String? _extractYouTubeId(String url) {
+    final regExp = RegExp(
+      r'(?:m\.youtube\.com|youtube\.com)/watch\?(?:.*&)?v=([\w-]{11})',
+      caseSensitive: false,
+    );
+    final match = regExp.firstMatch(url);
+    return match?.group(1);
+  }
+
+  // Rave gibi: Tespit edilen videoyu doğrudan odada aç
+  Future<void> _openVideoInRoom(String url, String videoId) async {
+    // Videoyu durdur (arka ses engelle)
+    try {
+      await _controller?.runJavaScript('''
+        (function() {
+          document.querySelectorAll('video').forEach(function(v) {
+            v.pause(); v.muted = true; v.volume = 0;
+          });
+        })();
+      ''');
+    } catch (_) {}
+
+    String title = 'YouTube Videosu';
+    try {
+      title = (await _controller?.getTitle() ?? 'YouTube Videosu')
+          .replaceAll('- YouTube', '').trim();
+      if (title.isEmpty) title = 'YouTube Videosu';
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    final thumb = 'https://img.youtube.com/vi/$videoId/hqdefault.jpg';
+    final videoToPlay = Movie(
+      id: 'yt_$videoId',
+      title: title,
+      category: 'YouTube',
+      duration: 'YouTube',
+      rating: 4.9,
+      posterUrl: thumb,
+      backdropUrl: thumb,
+      description: 'YouTube videosu',
+      videoUrl: 'https://m.youtube.com/watch?v=$videoId',
+      releaseYear: '2026',
+      tags: ['YouTube', 'Canlı', 'Oda'],
+    );
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => WatchPartyRoomScreen(
+          movie: videoToPlay,
+          invitedFriends: const [],
+        ),
+      ),
+    );
   }
 
   void _openMovieDetail(Movie video) {
@@ -104,139 +154,7 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
     );
   }
 
-  void _directStartParty(Movie video) async {
-    try {
-      await _controller?.runJavaScript('''
-        (function() {
-          var videos = document.querySelectorAll('video');
-          videos.forEach(function(v) {
-            v.pause();
-            v.muted = true;
-          });
-        })();
-      ''');
-    } catch (_) {}
 
-    if (!mounted) return;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => WatchPartyRoomScreen(
-          movie: video,
-          invitedFriends: const [],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _transferCurrentVideoToRoom() async {
-    String currentUrl = '';
-    String title = 'YouTube Videosu';
-    try {
-      currentUrl = await _controller?.currentUrl() ?? '';
-      title = await _controller?.getTitle() ?? 'YouTube Videosu';
-    } catch (_) {}
-
-    title = title.replaceAll('- YouTube', '').trim();
-    if (title.isEmpty || title == 'YouTube') title = 'YouTube Videosu';
-
-    String? videoId;
-    if (currentUrl.isNotEmpty) {
-      final regExp = RegExp(
-        r'(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([\w-]{11})',
-        caseSensitive: false,
-      );
-      final match = regExp.firstMatch(currentUrl);
-      if (match != null && match.groupCount >= 1) {
-        videoId = match.group(1);
-      }
-    }
-
-    // Rave gibi: videonun m.youtube.com URL'ini oda ekranına gönder
-    // Oda ekranı bunu kendi WebView'ında açacak - "video kullanılamıyor" olmaz
-    final Movie videoToPlay;
-    if (videoId != null && videoId.isNotEmpty) {
-      final thumb = 'https://img.youtube.com/vi/$videoId/hqdefault.jpg';
-      videoToPlay = Movie(
-        id: 'yt_$videoId',
-        title: title,
-        category: 'YouTube',
-        duration: 'YouTube',
-        rating: 4.9,
-        posterUrl: thumb,
-        backdropUrl: thumb,
-        description: 'YouTube üzerinden odaya aktarılan video',
-        // m.youtube.com URL'i direkt WebView'da açılacak - embed yok, kısıtlama yok
-        videoUrl: 'https://m.youtube.com/watch?v=$videoId',
-        releaseYear: '2026',
-        tags: ['YouTube', 'Canlı', 'Oda'],
-      );
-    } else if (currentUrl.contains('youtube.com') || currentUrl.contains('youtu.be')) {
-      // URL var ama video ID parse edilemedi - direkt URL'i kullan
-      videoToPlay = Movie(
-        id: 'yt_${DateTime.now().millisecondsSinceEpoch}',
-        title: title,
-        category: 'YouTube',
-        duration: 'YouTube',
-        rating: 4.9,
-        posterUrl: 'https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=600&auto=format&fit=crop&q=80',
-        backdropUrl: 'https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=1200&auto=format&fit=crop&q=80',
-        description: 'YouTube üzerinden odaya aktarılan video',
-        videoUrl: currentUrl.replaceFirst('www.youtube.com', 'm.youtube.com'),
-        releaseYear: '2026',
-        tags: ['YouTube', 'Canlı', 'Oda'],
-      );
-    } else {
-      // Hiçbir video açık değilse YouTube ana sayfasını aç
-      videoToPlay = Movie(
-        id: 'yt_home',
-        title: 'YouTube',
-        category: 'YouTube',
-        duration: 'YouTube',
-        rating: 4.9,
-        posterUrl: 'https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=600&auto=format&fit=crop&q=80',
-        backdropUrl: 'https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=1200&auto=format&fit=crop&q=80',
-        description: 'YouTube',
-        videoUrl: 'https://m.youtube.com',
-        releaseYear: '2026',
-        tags: ['YouTube', 'Canlı', 'Oda'],
-      );
-    }
-
-    // Arka plandaki YouTube sesini durdur
-    try {
-      await _controller?.runJavaScript('''
-        (function() {
-          var videos = document.querySelectorAll('video');
-          videos.forEach(function(v) {
-            v.pause();
-            v.muted = true;
-            v.volume = 0;
-          });
-          // YouTube player API ile durdur
-          if (window.ytInitialPlayerResponse) {
-            try {
-              var player = document.querySelector('.html5-main-video');
-              if (player) { player.pause(); player.muted = true; }
-            } catch(e) {}
-          }
-        })();
-      ''');
-    } catch (_) {}
-
-    if (!mounted) return;
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => WatchPartyRoomScreen(
-          movie: videoToPlay,
-          invitedFriends: const [],
-        ),
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -245,7 +163,7 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            // Ana Gövde (Mobil Cihazda Gerçek WebView, Web/Masaüstü'nde Netflix tarzı YouTube kataloğu)
+            // Ana Gövde - Gerçek YouTube WebView
             Positioned.fill(
               child: (_controller != null && !_hasError)
                   ? WebViewWidget(controller: _controller!)
@@ -266,7 +184,7 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
                 ),
               ),
 
-            // Sol Üst Şeffaf Geri Butonu (Netflix ile birebir aynı)
+            // Sol Üst Şeffaf Geri Butonu
             Positioned(
               top: 12,
               left: 12,
@@ -293,29 +211,6 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
                 ),
               ),
             ),
-
-            // Web Görünümünde Altta Odaya Aktar Butonu
-            if (_controller != null && !_hasError)
-              Positioned(
-                bottom: 16,
-                left: 20,
-                right: 20,
-                child: ElevatedButton.icon(
-                  onPressed: _transferCurrentVideoToRoom,
-                  icon: const Icon(CupertinoIcons.play_arrow_solid, color: Colors.white, size: 18),
-                  label: const Text(
-                    'Videoyu Odaya Aktar & İzle',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF0000),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    elevation: 6,
-                    shadowColor: const Color(0xFFFF0000).withValues(alpha: 0.5),
-                  ),
-                ),
-              ),
           ],
         ),
       ),
@@ -422,7 +317,18 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           ElevatedButton.icon(
-                            onPressed: () => _directStartParty(featuredVideo),
+                            onPressed: () {
+                              final videoId = featuredVideo.youTubeVideoId ?? '';
+                              if (videoId.isNotEmpty) {
+                                _openVideoInRoom(featuredVideo.videoUrl, videoId);
+                              } else {
+                                Navigator.push(context, MaterialPageRoute(
+                                  builder: (context) => WatchPartyRoomScreen(
+                                    movie: featuredVideo, invitedFriends: const [],
+                                  ),
+                                ));
+                              }
+                            },
                             icon: const Icon(CupertinoIcons.play_arrow_solid, color: Colors.black, size: 18),
                             label: const Text(
                               'Oynat',
