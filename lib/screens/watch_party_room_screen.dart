@@ -347,46 +347,67 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
   void _handleYouTubeBridgeMessage(String rawJson) {
     try {
       final Map<String, dynamic> data = jsonDecode(rawJson);
-      final String type = data['type']?.toString() ?? '';
+      final String type = data['type']?.toString().toUpperCase() ?? '';
       final payload = data['payload'];
 
-      if (type == 'READY') {
-        if (payload is Map) {
-          final dur = (payload['duration'] as num?)?.toDouble() ?? 0.0;
-          if (dur > 0 && mounted) {
-            setState(() {
-              _totalSeconds = dur;
-            });
-          }
-        }
-      } else if (type == 'TIME_UPDATE') {
-        if (payload is Map && mounted) {
-          final cur = (payload['currentTime'] as num?)?.toDouble() ?? 0.0;
-          final dur = (payload['duration'] as num?)?.toDouble() ?? 0.0;
-          setState(() {
-            _currentSeconds = cur;
-            if (dur > 0) _totalSeconds = dur;
-          });
-        }
-      } else if (type == 'STATE_CHANGE') {
-        if (payload is Map && mounted) {
-          final int stateCode = (payload['state'] as num?)?.toInt() ?? -1;
-          final double cur = (payload['currentTime'] as num?)?.toDouble() ?? _currentSeconds;
-          // YT.PlayerState.PLAYING = 1, PAUSED = 2
-          if (stateCode == 1) {
+      if (payload is! Map) return;
+
+      final double cur = (payload['currentTime'] as num?)?.toDouble() ?? _currentSeconds;
+      final double dur = (payload['duration'] as num?)?.toDouble() ?? 0.0;
+
+      if (dur > 0 && mounted) {
+        _totalSeconds = dur;
+      }
+
+      switch (type) {
+        case 'PLAY':
+          if (mounted) {
             setState(() {
               _isPlaying = true;
               _currentSeconds = cur;
             });
-            SocketService().sendVideoSync(action: 'play', time: cur);
-          } else if (stateCode == 2) {
+          }
+          SocketService().sendVideoSync(action: 'play', time: cur);
+          break;
+
+        case 'PAUSE':
+        case 'ENDED':
+          if (mounted) {
             setState(() {
               _isPlaying = false;
               _currentSeconds = cur;
             });
+          }
+          SocketService().sendVideoSync(action: 'pause', time: cur);
+          break;
+
+        case 'SEEK':
+          if (mounted) {
+            setState(() {
+              _currentSeconds = cur;
+            });
+          }
+          SocketService().sendVideoSync(action: 'seek', time: cur);
+          break;
+
+        case 'TIME_UPDATE':
+          if (mounted) {
+            setState(() {
+              _currentSeconds = cur;
+            });
+          }
+          break;
+
+        case 'STATE_CHANGE':
+          final int stateCode = (payload['state'] as num?)?.toInt() ?? -1;
+          if (stateCode == 1) {
+            if (mounted) setState(() => _isPlaying = true);
+            SocketService().sendVideoSync(action: 'play', time: cur);
+          } else if (stateCode == 2) {
+            if (mounted) setState(() => _isPlaying = false);
             SocketService().sendVideoSync(action: 'pause', time: cur);
           }
-        }
+          break;
       }
     } catch (_) {}
   }
@@ -398,25 +419,24 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Watch Party Isolated Player</title>
+  <title>Watch Party YouTube Player</title>
   <style>
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
       -webkit-touch-callout: none;
-      -webkit-user-select: none;
-      user-select: none;
     }
     html, body {
       width: 100%;
       height: 100%;
+      margin: 0;
+      padding: 0;
       background-color: #000000;
       overflow: hidden;
       display: flex;
       align-items: center;
       justify-content: center;
-      pointer-events: none; /* YouTube native UI tıklamalarını tamamen engelle */
     }
     #player-wrapper {
       position: absolute;
@@ -426,14 +446,12 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       height: 100%;
       background: #000;
       overflow: hidden;
-      pointer-events: none;
     }
     #player {
       width: 100% !important;
       height: 100% !important;
       border: 0;
       display: block;
-      pointer-events: none;
     }
   </style>
 </head>
@@ -445,7 +463,10 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
   <script>
     var player = null;
     var isRemoteCommand = false;
-    var timeUpdateInterval = null;
+    var remoteCommandTimer = null;
+    var lastKnownTime = 0;
+    var isPlaying = false;
+    var lastCheckTimestamp = Date.now();
 
     function sendToHost(eventType, payload) {
       try {
@@ -465,14 +486,11 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
         videoId: '$videoId',
         playerVars: {
           'autoplay': 1,
-          'controls': 0,        // YouTube kendi kontrollerini tamamen gizle/pasifize et
-          'disablekb': 1,       // Klavye kontrolünü kapat
-          'fs': 0,              // YouTube tam ekran butonunu kapat
-          'playsinline': 1,     // Sayfa içi oynatma
+          'controls': 1,        // YouTube orijinal kontrolleri tam aktif
+          'playsinline': 1,     // Sayfa içinde oynat
           'rel': 0,             // İlgili videoları gösterme
-          'modestbranding': 1,  // YouTube branding gizle
-          'enablejsapi': 1,     // IFrame Player API'yi aktive et
-          'iv_load_policy': 3,  // Notasyonları kapat
+          'modestbranding': 1,  // Sade branding
+          'enablejsapi': 1,     // IFrame API köprüsü
           'origin': 'https://party-rave.local'
         },
         events: {
@@ -484,96 +502,117 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     }
 
     function onPlayerReady(event) {
+      var dur = player.getDuration ? player.getDuration() : 0;
+      var cur = player.getCurrentTime ? player.getCurrentTime() : 0;
+      lastKnownTime = cur;
+      lastCheckTimestamp = Date.now();
+
       sendToHost('READY', {
-        duration: player.getDuration ? player.getDuration() : 0,
-        currentTime: player.getCurrentTime ? player.getCurrentTime() : 0
+        duration: dur,
+        currentTime: cur
       });
 
-      if (timeUpdateInterval) clearInterval(timeUpdateInterval);
-      timeUpdateInterval = setInterval(function() {
-        if (player && player.getCurrentTime) {
-          sendToHost('TIME_UPDATE', {
-            currentTime: player.getCurrentTime(),
-            duration: player.getDuration ? player.getDuration() : 0
-          });
+      // Native seek & time update tespiti (250ms aralıkla)
+      setInterval(checkTimeAndSeek, 250);
+    }
+
+    function checkTimeAndSeek() {
+      if (!player || !player.getCurrentTime) return;
+      var now = Date.now();
+      var cur = player.getCurrentTime();
+      var dt = (now - lastCheckTimestamp) / 1000;
+      lastCheckTimestamp = now;
+
+      if (!isRemoteCommand) {
+        var expectedTime = isPlaying ? (lastKnownTime + dt) : lastKnownTime;
+        var diff = Math.abs(cur - expectedTime);
+
+        // Kullanıcı YouTube'un kendi süre çubuğundan sarma yaptıysa
+        if (diff > 1.3 && cur > 0.05) {
+          sendToHost('SEEK', { currentTime: cur, isPlaying: isPlaying });
         }
-      }, 500);
+
+        sendToHost('TIME_UPDATE', {
+          currentTime: cur,
+          duration: player.getDuration ? player.getDuration() : 0
+        });
+      }
+
+      lastKnownTime = cur;
     }
 
     function onPlayerStateChange(event) {
       var stateCode = event.data;
       var cur = player && player.getCurrentTime ? player.getCurrentTime() : 0;
 
+      // Uzak socket komutu çalışırken yerel state değişimlerini yankılamayı engelle
       if (isRemoteCommand) {
         return;
       }
 
-      sendToHost('STATE_CHANGE', {
-        state: stateCode,
-        currentTime: cur
-      });
+      if (stateCode === 1) { // PLAYING
+        isPlaying = true;
+        sendToHost('PLAY', { currentTime: cur });
+      } else if (stateCode === 2) { // PAUSED
+        isPlaying = false;
+        sendToHost('PAUSE', { currentTime: cur });
+      } else if (stateCode === 0) { // ENDED
+        isPlaying = false;
+        sendToHost('PAUSE', { currentTime: cur });
+      }
     }
 
     function onPlayerError(event) {
       sendToHost('ERROR', { code: event.data });
     }
 
-    window.remotePlay = function() {
+    // ========================================================
+    // WebSocket'ten gelen emirleri YouTube Player'a uygulayan metot
+    // ========================================================
+    window.remoteSync = function(action, timeInSeconds) {
       isRemoteCommand = true;
+      if (remoteCommandTimer) clearTimeout(remoteCommandTimer);
+
       try {
-        if (player && player.playVideo) player.playVideo();
-      } catch(e) {}
-      try {
-        var v = document.querySelector('video');
-        if (v) v.play();
-      } catch(e) {}
-      setTimeout(function() { isRemoteCommand = false; }, 800);
+        var cur = player && player.getCurrentTime ? player.getCurrentTime() : 0;
+
+        // Zaman farkı 1.2s'den büyükse veya komut 'seek' ise player'ı sar
+        if (Math.abs(cur - timeInSeconds) > 1.2 || action === 'seek') {
+          if (player && player.seekTo) {
+            player.seekTo(timeInSeconds, true);
+          }
+          lastKnownTime = timeInSeconds;
+        }
+
+        if (action === 'play') {
+          isPlaying = true;
+          if (player && player.playVideo) player.playVideo();
+        } else if (action === 'pause') {
+          isPlaying = false;
+          if (player && player.pauseVideo) player.pauseVideo();
+        }
+      } catch (e) {}
+
+      // 1000ms boyunca yerel dinleyicileri bastır (sonsuz döngüyü önle)
+      remoteCommandTimer = setTimeout(function() {
+        isRemoteCommand = false;
+        if (player && player.getCurrentTime) {
+          lastKnownTime = player.getCurrentTime();
+        }
+        lastCheckTimestamp = Date.now();
+      }, 1000);
+    };
+
+    window.remotePlay = function() {
+      window.remoteSync('play', player ? player.getCurrentTime() : 0);
     };
 
     window.remotePause = function() {
-      isRemoteCommand = true;
-      try {
-        if (player && player.pauseVideo) player.pauseVideo();
-      } catch(e) {}
-      try {
-        var v = document.querySelector('video');
-        if (v) v.pause();
-      } catch(e) {}
-      setTimeout(function() { isRemoteCommand = false; }, 800);
+      window.remoteSync('pause', player ? player.getCurrentTime() : 0);
     };
 
     window.remoteSeekTo = function(seconds) {
-      isRemoteCommand = true;
-      try {
-        if (player && player.seekTo) player.seekTo(seconds, true);
-      } catch(e) {}
-      try {
-        var v = document.querySelector('video');
-        if (v) v.currentTime = seconds;
-      } catch(e) {}
-      setTimeout(function() { isRemoteCommand = false; }, 800);
-    };
-
-    window.remoteSync = function(action, timeInSeconds) {
-      isRemoteCommand = true;
-      try {
-        var current = player && player.getCurrentTime ? player.getCurrentTime() : 0;
-        if (Math.abs(current - timeInSeconds) > 1.2) {
-          if (player && player.seekTo) player.seekTo(timeInSeconds, true);
-          var v = document.querySelector('video');
-          if (v) v.currentTime = timeInSeconds;
-        }
-        if (action === 'play') {
-          if (player && player.playVideo) player.playVideo();
-          var v = document.querySelector('video');
-          if (v) v.play();
-        } else if (action === 'pause') {
-          if (player && player.pauseVideo) player.pauseVideo();
-          var v = document.querySelector('video');
-          if (v) v.pause();
-        }
-      } catch(e) {}
-      setTimeout(function() { isRemoteCommand = false; }, 800);
+      window.remoteSync('seek', seconds);
     };
   </script>
 </body>
@@ -1994,6 +2033,51 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       return AspectRatio(
         aspectRatio: 16 / 9,
         child: googleBody,
+      );
+    }
+
+    // Web video (YouTube / Netflix): Özel custom player overlay'i tamamen kaldır, doğrudan orijinal YouTube/Web UI görünsün
+    if (_isWebVideo && _webPlayerController != null) {
+      final webPlayerWidget = Container(
+        color: Colors.black,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            WebViewWidget(controller: _webPlayerController!),
+            if (isFullScreen)
+              Positioned(
+                top: 18,
+                left: 20,
+                child: GestureDetector(
+                  onTap: _toggleOrientation,
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.65),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: const Icon(CupertinoIcons.chevron_back, color: Colors.white, size: 18),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+
+      if (isFullScreen || !_isChatVisible) {
+        return webPlayerWidget;
+      }
+      if (widget.movie.videoUrl.contains('netflix.com')) {
+        return SizedBox(
+          height: MediaQuery.of(context).size.height * 0.45,
+          child: webPlayerWidget,
+        );
+      }
+      return AspectRatio(
+        aspectRatio: 16 / 9,
+        child: webPlayerWidget,
       );
     }
 
