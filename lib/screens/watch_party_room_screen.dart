@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -82,7 +83,7 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
 
   // Video Playback Duration Simulation
   double _currentSeconds = 870.0; // 14:30
-  final double _totalSeconds = 3300.0; // 55:00
+  double _totalSeconds = 3300.0; // 55:00
   Timer? _playbackTimer;
   bool _showControls = true;
   Timer? _controlsHideTimer;
@@ -166,21 +167,7 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
         _currentSeconds = time.clamp(0.0, _totalSeconds);
         _isPlaying = isPlaying;
         if (_isWebVideo && _webPlayerController != null) {
-          final cmd = isPlaying ? 'playVideo' : 'pauseVideo';
-          _webPlayerController?.runJavaScript('''
-            (function() {
-              var iframe = document.getElementById('player');
-              if (iframe && iframe.contentWindow) {
-                iframe.contentWindow.postMessage('{"event":"command","func":"seekTo","args":[${time.toInt()}, true]}', '*');
-                iframe.contentWindow.postMessage('{"event":"command","func":"$cmd","args":""}', '*');
-              }
-              var v = document.querySelector('video');
-              if (v) {
-                v.currentTime = ${time.toInt()};
-                if ('$cmd' === 'playVideo') { v.play(); } else { v.pause(); }
-              }
-            })();
-          ''');
+          _webPlayerController?.runJavaScript("if (window.remoteSync) { window.remoteSync('$action', $time); }");
         } else if (_videoController != null && _isVideoInitialized) {
           _videoController!.seekTo(Duration(seconds: time.toInt()));
           if (isPlaying) {
@@ -290,53 +277,55 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
         'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36',
       );
 
-      controller.setNavigationDelegate(
-        NavigationDelegate(
-          onNavigationRequest: (req) {
-            final url = req.url;
-            // Netflix / YouTube native app açma girişimlerini engelle
-            if (url.startsWith('intent:') || url.startsWith('netflix:') ||
-                url.startsWith('market:') || url.startsWith('youtube:')) {
-              return NavigationDecision.prevent;
-            }
-            return NavigationDecision.navigate;
-          },
-          onPageFinished: (url) {
-            // Sayfa yüklenince medya izinlerini tetikle (DRM için)
-            controller.runJavaScript('''
-              (function() {
-                // DOM storage ve cookie erişimi
-                try { localStorage.setItem('rave_init', '1'); } catch(e) {}
-                // Otomatik oynatmaya izin ver
-                document.addEventListener('click', function(){}, {once: true});
-              })();
-            ''');
-          },
-        ),
-      );
+      final ytId = movie.youTubeVideoId ?? extractYouTubeVideoId(movie.videoUrl);
 
-      // Rave'in yaklaşımı: doğrudan platforma yönlendir
-      // YouTube: video URL'ini doğrudan YouTube sayfası olarak aç
-      // Netflix: browse sayfasını aç (kullanıcı zaten giriş yapmış)
-      final ytId = movie.youTubeVideoId;
       if (ytId != null && ytId.isNotEmpty) {
-        // YouTube'da video sayfasını mobil olarak aç (m.youtube.com)
-        controller.loadRequest(Uri.parse('https://m.youtube.com/watch?v=$ytId&autoplay=1'));
-      } else if (movie.videoUrl.contains('youtube.com') || movie.videoUrl.contains('youtu.be')) {
-        // Direkt YouTube URL'i aç
-        String ytUrl = movie.videoUrl;
-        if (ytUrl.contains('youtu.be/')) {
-          final id = ytUrl.split('youtu.be/').last.split('?').first;
-          ytUrl = 'https://m.youtube.com/watch?v=$id&autoplay=1';
-        } else if (ytUrl.contains('youtube.com/watch')) {
-          ytUrl = ytUrl.replaceFirst('www.youtube.com', 'm.youtube.com');
-          if (!ytUrl.contains('autoplay')) ytUrl += '&autoplay=1';
-        }
-        controller.loadRequest(Uri.parse(ytUrl));
-      } else if (movie.videoUrl.contains('netflix.com')) {
-        // Netflix: /watch/ URL'ini aç (DRM native WebView ile çalışır)
-        controller.loadRequest(Uri.parse(movie.videoUrl));
+        // YouTube IFrame Player JS köprüsünü kur
+        controller.addJavaScriptChannel(
+          'YouTubeBridge',
+          onMessageReceived: (JavaScriptMessage msg) {
+            _handleYouTubeBridgeMessage(msg.message);
+          },
+        );
+
+        controller.setNavigationDelegate(
+          NavigationDelegate(
+            onNavigationRequest: (req) {
+              final url = req.url;
+              if (url.startsWith('intent:') || url.startsWith('youtube:') ||
+                  url.startsWith('market:') || url.startsWith('vnd.youtube:')) {
+                return NavigationDecision.prevent;
+              }
+              return NavigationDecision.navigate;
+            },
+          ),
+        );
+
+        // İzole HTML şablonunu yükle
+        final html = _buildYouTubeIsolatedPlayerHtml(ytId);
+        controller.loadHtmlString(html, baseUrl: 'https://party-rave.local');
       } else {
+        // Netflix ve diğer web kaynakları
+        controller.setNavigationDelegate(
+          NavigationDelegate(
+            onNavigationRequest: (req) {
+              final url = req.url;
+              if (url.startsWith('intent:') || url.startsWith('netflix:') ||
+                  url.startsWith('market:') || url.startsWith('youtube:')) {
+                return NavigationDecision.prevent;
+              }
+              return NavigationDecision.navigate;
+            },
+            onPageFinished: (url) {
+              controller.runJavaScript('''
+                (function() {
+                  try { localStorage.setItem('rave_init', '1'); } catch(e) {}
+                  document.addEventListener('click', function(){}, {once: true});
+                })();
+              ''');
+            },
+          ),
+        );
         controller.loadRequest(Uri.parse(movie.videoUrl));
       }
 
@@ -345,6 +334,217 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
         _isVideoInitialized = true;
       });
     } catch (_) {}
+  }
+
+  void _handleYouTubeBridgeMessage(String rawJson) {
+    try {
+      final Map<String, dynamic> data = jsonDecode(rawJson);
+      final String type = data['type']?.toString() ?? '';
+      final payload = data['payload'];
+
+      if (type == 'READY') {
+        if (payload is Map) {
+          final dur = (payload['duration'] as num?)?.toDouble() ?? 0.0;
+          if (dur > 0 && mounted) {
+            setState(() {
+              _totalSeconds = dur;
+            });
+          }
+        }
+      } else if (type == 'TIME_UPDATE') {
+        if (payload is Map && mounted) {
+          final cur = (payload['currentTime'] as num?)?.toDouble() ?? 0.0;
+          final dur = (payload['duration'] as num?)?.toDouble() ?? 0.0;
+          setState(() {
+            _currentSeconds = cur;
+            if (dur > 0) _totalSeconds = dur;
+          });
+        }
+      } else if (type == 'STATE_CHANGE') {
+        if (payload is Map && mounted) {
+          final int stateCode = (payload['state'] as num?)?.toInt() ?? -1;
+          final double cur = (payload['currentTime'] as num?)?.toDouble() ?? _currentSeconds;
+          // YT.PlayerState.PLAYING = 1, PAUSED = 2
+          if (stateCode == 1) {
+            setState(() {
+              _isPlaying = true;
+              _currentSeconds = cur;
+            });
+            SocketService().sendVideoSync(action: 'play', time: cur);
+          } else if (stateCode == 2) {
+            setState(() {
+              _isPlaying = false;
+              _currentSeconds = cur;
+            });
+            SocketService().sendVideoSync(action: 'pause', time: cur);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  String _buildYouTubeIsolatedPlayerHtml(String videoId) {
+    return '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Watch Party Isolated Player</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      background-color: #000000;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #player-wrapper {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+    #player {
+      width: 100% !important;
+      height: 100% !important;
+      border: 0;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="player-wrapper">
+    <div id="player"></div>
+  </div>
+
+  <script>
+    var player = null;
+    var isRemoteCommand = false;
+    var timeUpdateInterval = null;
+
+    function sendToHost(eventType, payload) {
+      try {
+        if (window.YouTubeBridge && window.YouTubeBridge.postMessage) {
+          window.YouTubeBridge.postMessage(JSON.stringify({ type: eventType, payload: payload }));
+        }
+      } catch (e) {}
+    }
+
+    var tag = document.createElement('script');
+    tag.src = "https://www.youtube.com/iframe_api";
+    var firstScriptTag = document.getElementsByTagName('script')[0];
+    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+    function onYouTubeIframeAPIReady() {
+      player = new YT.Player('player', {
+        videoId: '$videoId',
+        playerVars: {
+          'autoplay': 1,
+          'controls': 1,
+          'playsinline': 1,
+          'rel': 0,
+          'modestbranding': 1,
+          'enablejsapi': 1,
+          'fs': 0,
+          'iv_load_policy': 3,
+          'origin': 'https://party-rave.local'
+        },
+        events: {
+          'onReady': onPlayerReady,
+          'onStateChange': onPlayerStateChange,
+          'onError': onPlayerError
+        }
+      });
+    }
+
+    function onPlayerReady(event) {
+      sendToHost('READY', {
+        duration: player.getDuration ? player.getDuration() : 0,
+        currentTime: player.getCurrentTime ? player.getCurrentTime() : 0
+      });
+
+      if (timeUpdateInterval) clearInterval(timeUpdateInterval);
+      timeUpdateInterval = setInterval(function() {
+        if (player && player.getCurrentTime) {
+          sendToHost('TIME_UPDATE', {
+            currentTime: player.getCurrentTime(),
+            duration: player.getDuration ? player.getDuration() : 0
+          });
+        }
+      }, 500);
+    }
+
+    function onPlayerStateChange(event) {
+      var stateCode = event.data;
+      var cur = player && player.getCurrentTime ? player.getCurrentTime() : 0;
+
+      if (isRemoteCommand) {
+        return;
+      }
+
+      sendToHost('STATE_CHANGE', {
+        state: stateCode,
+        currentTime: cur
+      });
+    }
+
+    function onPlayerError(event) {
+      sendToHost('ERROR', { code: event.data });
+    }
+
+    window.remotePlay = function() {
+      if (!player || !player.playVideo) return;
+      isRemoteCommand = true;
+      player.playVideo();
+      setTimeout(function() { isRemoteCommand = false; }, 800);
+    };
+
+    window.remotePause = function() {
+      if (!player || !player.pauseVideo) return;
+      isRemoteCommand = true;
+      player.pauseVideo();
+      setTimeout(function() { isRemoteCommand = false; }, 800);
+    };
+
+    window.remoteSeekTo = function(seconds) {
+      if (!player || !player.seekTo) return;
+      isRemoteCommand = true;
+      player.seekTo(seconds, true);
+      setTimeout(function() { isRemoteCommand = false; }, 800);
+    };
+
+    window.remoteSync = function(action, timeInSeconds) {
+      if (!player) return;
+      isRemoteCommand = true;
+      var current = player.getCurrentTime ? player.getCurrentTime() : 0;
+      if (Math.abs(current - timeInSeconds) > 1.2) {
+        if (player.seekTo) player.seekTo(timeInSeconds, true);
+      }
+      if (action === 'play') {
+        if (player.playVideo) player.playVideo();
+      } else if (action === 'pause') {
+        if (player.pauseVideo) player.pauseVideo();
+      }
+      setTimeout(function() { isRemoteCommand = false; }, 800);
+    };
+  </script>
+</body>
+</html>
+''';
   }
 
   void _startPlaybackTimer() {
@@ -539,19 +739,11 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     setState(() {
       _isPlaying = !_isPlaying;
       if (_isWebVideo && _webPlayerController != null) {
-        final cmd = _isPlaying ? 'playVideo' : 'pauseVideo';
-        _webPlayerController?.runJavaScript('''
-          (function() {
-            var iframe = document.getElementById('player');
-            if (iframe && iframe.contentWindow) {
-              iframe.contentWindow.postMessage('{"event":"command","func":"$cmd","args":""}', '*');
-            }
-            var v = document.querySelector('video');
-            if (v) {
-              if ('$cmd' === 'playVideo') { v.play(); } else { v.pause(); }
-            }
-          })();
-        ''');
+        if (_isPlaying) {
+          _webPlayerController?.runJavaScript('if (window.remotePlay) { window.remotePlay(); }');
+        } else {
+          _webPlayerController?.runJavaScript('if (window.remotePause) { window.remotePause(); }');
+        }
       } else if (_videoController != null && _isVideoInitialized) {
         if (_isPlaying) {
           _videoController!.play();
@@ -573,16 +765,7 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     setState(() {
       _currentSeconds = (_currentSeconds + seconds).clamp(0.0, _totalSeconds);
       if (_isWebVideo && _webPlayerController != null) {
-        _webPlayerController?.runJavaScript('''
-          (function() {
-            var iframe = document.getElementById('player');
-            if (iframe && iframe.contentWindow) {
-              iframe.contentWindow.postMessage('{"event":"command","func":"seekTo","args":[${_currentSeconds.toInt()}, true]}', '*');
-            }
-            var v = document.querySelector('video');
-            if (v) { v.currentTime = ${_currentSeconds.toInt()}; }
-          })();
-        ''');
+        _webPlayerController?.runJavaScript('if (window.remoteSeekTo) { window.remoteSeekTo($_currentSeconds); }');
       } else if (_videoController != null && _isVideoInitialized) {
         _videoController!.seekTo(Duration(seconds: _currentSeconds.toInt()));
       }
@@ -1945,8 +2128,8 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
                 ),
 
               // Orta Oynatma Kontrolleri (-10s / Play-Pause / +10s)
-              // Web videolarında (YouTube/Netflix) kendi kontrolleri olduğu için gizle
-              if (_showControls && !_isWebVideo)
+              // Sadece Netflix'te web kontrolleri olduğu için gizle; YouTube izole player'da göster
+              if (_showControls && !widget.movie.videoUrl.contains('netflix.com'))
                 Center(
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -2026,8 +2209,8 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
                   },
                 ),
 
-              // Alt Oynatıcı Çubuğu — sadece direct video modunda göster
-              if (_showControls && !_isWebVideo)
+              // Alt Oynatıcı Çubuğu
+              if (_showControls && !widget.movie.videoUrl.contains('netflix.com'))
                 Positioned(
                   left: 12,
                   right: 12,
@@ -2052,7 +2235,7 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
                             final total = _videoController?.value.duration.inSeconds.toDouble() ?? _totalSeconds;
                             final current = _videoController?.value.position.inSeconds.toDouble() ?? _currentSeconds;
                             return Slider(
-                              value: current.clamp(0.0, total),
+                              value: current.clamp(0.0, total > 0 ? total : 1.0),
                               min: 0.0,
                               max: total > 0 ? total : 1.0,
                               onChangeStart: (val) {
@@ -2064,7 +2247,15 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
                                 });
                               },
                               onChangeEnd: (val) {
-                                _videoController?.seekTo(Duration(seconds: val.toInt()));
+                                if (_isWebVideo && _webPlayerController != null) {
+                                  _webPlayerController?.runJavaScript('if (window.remoteSeekTo) { window.remoteSeekTo($val); }');
+                                } else {
+                                  _videoController?.seekTo(Duration(seconds: val.toInt()));
+                                }
+                                SocketService().sendVideoSync(
+                                  action: 'seek',
+                                  time: val,
+                                );
                                 _startControlsTimer();
                               },
                             );
@@ -2164,8 +2355,8 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     if (isFullScreen || !_isChatVisible) {
       return playerBody;
     }
-    // Web video (YouTube/Netflix): tam yükseklik — kendi player'ı zaten var
-    if (_isWebVideo) {
+    // Web video: Netflix tam yükseklik; YouTube ise sinematik 16/9 AspectRatio
+    if (widget.movie.videoUrl.contains('netflix.com')) {
       return SizedBox(
         height: MediaQuery.of(context).size.height * 0.45,
         child: playerBody,

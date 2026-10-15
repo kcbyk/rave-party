@@ -83,7 +83,7 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
                 window.__raveHooked = true;
                 var lastSent = '';
                 function checkAndSend(url) {
-                  if (url !== lastSent && url.indexOf('/watch') !== -1 && url.indexOf('v=') !== -1) {
+                  if (url !== lastSent && (url.indexOf('/watch') !== -1 || url.indexOf('/shorts/') !== -1 || url.indexOf('/live/') !== -1 || url.indexOf('youtu.be') !== -1)) {
                     lastSent = url;
                     try { YouTubeRave.postMessage(url); } catch(e) {}
                   }
@@ -127,12 +127,7 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
 
   // YouTube video ID'sini URL'den çıkar
   String? _extractYouTubeId(String url) {
-    final regExp = RegExp(
-      r'(?:m\.youtube\.com|youtube\.com)/watch\?(?:.*&)?v=([\w-]{11})',
-      caseSensitive: false,
-    );
-    final match = regExp.firstMatch(url);
-    return match?.group(1);
+    return extractYouTubeVideoId(url);
   }
 
   // Rave gibi: Tespit edilen videoyu doğrudan odada aç

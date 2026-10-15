@@ -31,14 +31,31 @@ class Movie {
       category.toLowerCase().contains('youtube');
 
   String? get youTubeVideoId {
-    final regExp = RegExp(
-      r'(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([\w-]{11})',
-      caseSensitive: false,
-    );
-    final match = regExp.firstMatch(videoUrl);
-    if (match != null && match.groupCount >= 1) {
-      return match.group(1);
+    final fromUrl = extractYouTubeVideoId(videoUrl);
+    if (fromUrl != null) return fromUrl;
+    if (id.startsWith('yt_') && id.length >= 14) {
+      return id.substring(3);
     }
     return null;
   }
+}
+
+String? extractYouTubeVideoId(String? input) {
+  if (input == null || input.trim().isEmpty) return null;
+  final cleanInput = input.trim();
+
+  if (RegExp(r'^[a-zA-Z0-9_-]{11}$').hasMatch(cleanInput)) {
+    return cleanInput;
+  }
+
+  final regExp = RegExp(
+    r'(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})',
+    caseSensitive: false,
+  );
+
+  final match = regExp.firstMatch(cleanInput);
+  if (match != null && match.groupCount >= 1) {
+    return match.group(1);
+  }
+  return null;
 }
