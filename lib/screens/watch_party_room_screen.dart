@@ -63,10 +63,15 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
 
   void _toggleOrientation() {
     HapticFeedback.lightImpact();
+    _setFullscreen(!_isLandscape);
+  }
+
+  void _setFullscreen(bool enable) {
+    if (_isLandscape == enable) return;
     setState(() {
-      _isLandscape = !_isLandscape;
+      _isLandscape = enable;
     });
-    if (_isLandscape) {
+    if (enable) {
       SystemChrome.setPreferredOrientations([
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
@@ -76,6 +81,8 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       SystemChrome.setPreferredOrientations([
         DeviceOrientation.portraitUp,
         DeviceOrientation.portraitDown,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
       ]);
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
@@ -109,6 +116,13 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
   @override
   void initState() {
     super.initState();
+    // Watch Party odasında sensöre duyarlı serbest yönelim sağla
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     _inputFocus.addListener(() {
       if (mounted) setState(() {});
     });
@@ -398,6 +412,11 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
           }
           break;
 
+        case 'FULLSCREEN_CHANGE':
+          final bool isFs = payload['isFullScreen'] == true;
+          _setFullscreen(isFs);
+          break;
+
         case 'STATE_CHANGE':
           final int stateCode = (payload['state'] as num?)?.toInt() ?? -1;
           if (stateCode == 1) {
@@ -428,8 +447,8 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       -webkit-touch-callout: none;
     }
     html, body {
-      width: 100%;
-      height: 100%;
+      width: 100vw;
+      height: 100vh;
       margin: 0;
       padding: 0;
       background-color: #000000;
@@ -442,16 +461,19 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       position: absolute;
       top: 0;
       left: 0;
-      width: 100%;
-      height: 100%;
+      width: 100vw;
+      height: 100vh;
       background: #000;
       overflow: hidden;
     }
     #player {
-      width: 100% !important;
-      height: 100% !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      max-width: 100%;
+      max-height: 100%;
       border: 0;
       display: block;
+      object-fit: contain;
     }
   </style>
 </head>
@@ -487,6 +509,7 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
         playerVars: {
           'autoplay': 1,
           'controls': 1,        // YouTube orijinal kontrolleri tam aktif
+          'fs': 1,              // Tam ekran butonunu tam aktif kıl
           'playsinline': 1,     // Sayfa içinde oynat
           'rel': 0,             // İlgili videoları gösterme
           'modestbranding': 1,  // Sade branding
@@ -514,6 +537,49 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
 
       // Native seek & time update tespiti (250ms aralıkla)
       setInterval(checkTimeAndSeek, 250);
+
+      // Tam ekran değişikliklerini dinle
+      setupFullscreenListeners();
+    }
+
+    function setupFullscreenListeners() {
+      function handleFs() {
+        var isFs = !!(
+          document.fullscreenElement ||
+          document.webkitFullscreenElement ||
+          document.mozFullScreenElement ||
+          document.msFullscreenElement
+        );
+        sendToHost('FULLSCREEN_CHANGE', { isFullScreen: isFs });
+      }
+
+      document.addEventListener('fullscreenchange', handleFs);
+      document.addEventListener('webkitfullscreenchange', handleFs);
+      document.addEventListener('mozfullscreenchange', handleFs);
+      document.addEventListener('MSFullscreenChange', handleFs);
+
+      // Video elementine de doğrudan kanca at
+      function hookVideo() {
+        var v = document.querySelector('video');
+        if (v && !v.__fsHooked) {
+          v.__fsHooked = true;
+          var origEnter = v.webkitEnterFullscreen;
+          if (origEnter) {
+            v.webkitEnterFullscreen = function() {
+              sendToHost('FULLSCREEN_CHANGE', { isFullScreen: true });
+              return origEnter.apply(this, arguments);
+            };
+          }
+          var origExit = v.webkitExitFullscreen;
+          if (origExit) {
+            v.webkitExitFullscreen = function() {
+              sendToHost('FULLSCREEN_CHANGE', { isFullScreen: false });
+              return origExit.apply(this, arguments);
+            };
+          }
+        }
+      }
+      setInterval(hookVideo, 800);
     }
 
     function checkTimeAndSeek() {
