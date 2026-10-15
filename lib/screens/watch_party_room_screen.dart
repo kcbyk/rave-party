@@ -234,6 +234,9 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
 
     if (isWeb) {
       _isWebVideo = true;
+      _videoController?.pause();
+      _videoController?.dispose();
+      _videoController = null;
       _initWebPlayer(movie);
       return;
     }
@@ -271,6 +274,11 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       final controller = WebViewController();
       controller.setJavaScriptMode(JavaScriptMode.unrestricted);
       controller.setBackgroundColor(Colors.black);
+
+      // Programmatic playVideo() çağrılarının Android'de bloklanmaması için gesture zorunluluğunu kaldır
+      try {
+        (controller.platform as dynamic).setMediaPlaybackRequiresUserGesture(false);
+      } catch (_) {}
 
       // Rave gibi: mobil Chrome UA - DRM pipeline'ı aktive etmek için
       controller.setUserAgent(
@@ -408,6 +416,7 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       display: flex;
       align-items: center;
       justify-content: center;
+      pointer-events: none; /* YouTube native UI tıklamalarını tamamen engelle */
     }
     #player-wrapper {
       position: absolute;
@@ -417,12 +426,14 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
       height: 100%;
       background: #000;
       overflow: hidden;
+      pointer-events: none;
     }
     #player {
       width: 100% !important;
       height: 100% !important;
       border: 0;
       display: block;
+      pointer-events: none;
     }
   </style>
 </head>
@@ -454,13 +465,14 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
         videoId: '$videoId',
         playerVars: {
           'autoplay': 1,
-          'controls': 1,
-          'playsinline': 1,
-          'rel': 0,
-          'modestbranding': 1,
-          'enablejsapi': 1,
-          'fs': 0,
-          'iv_load_policy': 3,
+          'controls': 0,        // YouTube kendi kontrollerini tamamen gizle/pasifize et
+          'disablekb': 1,       // Klavye kontrolünü kapat
+          'fs': 0,              // YouTube tam ekran butonunu kapat
+          'playsinline': 1,     // Sayfa içi oynatma
+          'rel': 0,             // İlgili videoları gösterme
+          'modestbranding': 1,  // YouTube branding gizle
+          'enablejsapi': 1,     // IFrame Player API'yi aktive et
+          'iv_load_policy': 3,  // Notasyonları kapat
           'origin': 'https://party-rave.local'
         },
         events: {
@@ -507,38 +519,60 @@ class _WatchPartyRoomScreenState extends State<WatchPartyRoomScreen>
     }
 
     window.remotePlay = function() {
-      if (!player || !player.playVideo) return;
       isRemoteCommand = true;
-      player.playVideo();
+      try {
+        if (player && player.playVideo) player.playVideo();
+      } catch(e) {}
+      try {
+        var v = document.querySelector('video');
+        if (v) v.play();
+      } catch(e) {}
       setTimeout(function() { isRemoteCommand = false; }, 800);
     };
 
     window.remotePause = function() {
-      if (!player || !player.pauseVideo) return;
       isRemoteCommand = true;
-      player.pauseVideo();
+      try {
+        if (player && player.pauseVideo) player.pauseVideo();
+      } catch(e) {}
+      try {
+        var v = document.querySelector('video');
+        if (v) v.pause();
+      } catch(e) {}
       setTimeout(function() { isRemoteCommand = false; }, 800);
     };
 
     window.remoteSeekTo = function(seconds) {
-      if (!player || !player.seekTo) return;
       isRemoteCommand = true;
-      player.seekTo(seconds, true);
+      try {
+        if (player && player.seekTo) player.seekTo(seconds, true);
+      } catch(e) {}
+      try {
+        var v = document.querySelector('video');
+        if (v) v.currentTime = seconds;
+      } catch(e) {}
       setTimeout(function() { isRemoteCommand = false; }, 800);
     };
 
     window.remoteSync = function(action, timeInSeconds) {
-      if (!player) return;
       isRemoteCommand = true;
-      var current = player.getCurrentTime ? player.getCurrentTime() : 0;
-      if (Math.abs(current - timeInSeconds) > 1.2) {
-        if (player.seekTo) player.seekTo(timeInSeconds, true);
-      }
-      if (action === 'play') {
-        if (player.playVideo) player.playVideo();
-      } else if (action === 'pause') {
-        if (player.pauseVideo) player.pauseVideo();
-      }
+      try {
+        var current = player && player.getCurrentTime ? player.getCurrentTime() : 0;
+        if (Math.abs(current - timeInSeconds) > 1.2) {
+          if (player && player.seekTo) player.seekTo(timeInSeconds, true);
+          var v = document.querySelector('video');
+          if (v) v.currentTime = timeInSeconds;
+        }
+        if (action === 'play') {
+          if (player && player.playVideo) player.playVideo();
+          var v = document.querySelector('video');
+          if (v) v.play();
+        } else if (action === 'pause') {
+          if (player && player.pauseVideo) player.pauseVideo();
+          var v = document.querySelector('video');
+          if (v) v.pause();
+        }
+      } catch(e) {}
       setTimeout(function() { isRemoteCommand = false; }, 800);
     };
   </script>

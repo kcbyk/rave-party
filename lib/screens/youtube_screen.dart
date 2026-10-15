@@ -132,15 +132,16 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
 
   // Rave gibi: Tespit edilen videoyu doğrudan odada aç
   Future<void> _openVideoInRoom(String url, String videoId) async {
-    // Videoyu durdur (arka ses engelle)
+    // 1. Arkadaki YouTube sayfasını kesin olarak durdur ve boş sayfaya yönlendir (Arka ses sızıntısını engelle)
     try {
       await _controller?.runJavaScript('''
         (function() {
           document.querySelectorAll('video').forEach(function(v) {
-            v.pause(); v.muted = true; v.volume = 0;
+            v.pause(); v.muted = true; v.volume = 0; v.src = "";
           });
         })();
       ''');
+      await _controller?.loadRequest(Uri.parse('about:blank'));
     } catch (_) {}
 
     String title = 'YouTube Videosu';
@@ -162,7 +163,7 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
       posterUrl: thumb,
       backdropUrl: thumb,
       description: 'YouTube videosu',
-      videoUrl: 'https://m.youtube.com/watch?v=$videoId',
+      videoUrl: 'https://www.youtube.com/watch?v=$videoId',
       releaseYear: '2026',
       tags: ['YouTube', 'Canlı', 'Oda'],
     );
@@ -176,6 +177,13 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
         ),
       ),
     );
+
+    // Kullanıcı odadan çıktığında YouTube ekranını tekrar hazırla
+    if (mounted) {
+      try {
+        await _controller?.loadRequest(Uri.parse(widget.initialUrl));
+      } catch (_) {}
+    }
   }
 
   void _openMovieDetail(Movie video) {
